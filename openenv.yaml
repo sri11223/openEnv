@@ -1,0 +1,128 @@
+name: incident-response-triage
+version: "1.0.0"
+description: >
+  Simulates production incident response for on-call engineers.
+  Agents must triage alerts, investigate services, diagnose root causes,
+  apply remediations, escalate to teams, and communicate status updates.
+  Features progressive information disclosure — logs and metrics are
+  hidden until actively investigated — creating a genuine information-
+  gathering challenge with temporal urgency.
+
+author: "OpenEnv Contributor"
+license: "MIT"
+tags:
+  - openenv
+  - incident-response
+  - site-reliability
+  - operations
+  - triage
+  - on-call
+
+environment:
+  entrypoint: "app:app"
+  port: 7860
+  framework: "fastapi"
+
+tasks:
+  - id: severity_classification
+    name: "Severity Classification"
+    difficulty: easy
+    max_steps: 10
+    description: >
+      Database connection pool exhaustion incident.
+      Classify the incident severity (P1-P4) based on alerts
+      and investigation.  Graded on classification accuracy,
+      investigation quality, and efficiency.
+
+  - id: root_cause_analysis
+    name: "Root Cause Analysis"
+    difficulty: medium
+    max_steps: 15
+    description: >
+      Payment processing failure with multiple symptomatic services.
+      Identify the true root cause (Redis session eviction), distinguish
+      it from downstream symptoms, classify severity, and remediate.
+      Requires investigating the right services.
+
+  - id: full_incident_management
+    name: "Full Incident Management"
+    difficulty: hard
+    max_steps: 20
+    description: >
+      Cascading multi-service outage triggered by a bad deployment.
+      Six alerts across eight services including red herrings.  Must
+      investigate strategically, classify severity, diagnose root cause,
+      apply multiple remediations, escalate to correct teams, and post
+      status communications.  Tests the full incident commander workflow.
+
+action_space:
+  type: object
+  properties:
+    action_type:
+      type: string
+      enum:
+        - classify
+        - investigate
+        - diagnose
+        - remediate
+        - escalate
+        - communicate
+    target:
+      type: string
+      description: "Service name, team name, or communication channel."
+    parameters:
+      type: object
+      description: "Action-specific parameters (severity, root_cause, action, message, etc.)."
+    reasoning:
+      type: string
+      description: "Agent's explanation for the chosen action."
+
+observation_space:
+  type: object
+  properties:
+    incident_id:
+      type: string
+    step_number:
+      type: integer
+    max_steps:
+      type: integer
+    alerts:
+      type: array
+      description: "List of active alerts with service, severity, and message."
+    available_services:
+      type: array
+      description: "Services available for investigation."
+    investigated_services:
+      type: array
+      description: "Services already investigated."
+    logs:
+      type: object
+      description: "Service → log entries (populated after INVESTIGATE)."
+    metrics:
+      type: object
+      description: "Service → performance metrics (populated after INVESTIGATE)."
+    incident_status:
+      type: string
+      enum: [open, investigating, mitigating, resolved]
+    message:
+      type: string
+      description: "Feedback from the last action taken."
+
+reward:
+  type: dense
+  range: [-1.0, 1.0]
+  description: >
+    Dense per-step reward with multiple components:
+    investigation relevance, classification accuracy,
+    diagnosis correctness, remediation validity,
+    escalation appropriateness, communication quality,
+    and temporal degradation penalty.
+
+endpoints:
+  reset: "POST /reset"
+  step: "POST /step"
+  state: "GET /state"
+  tasks: "GET /tasks"
+  grader: "POST /grader"
+  baseline: "POST /baseline"
+  health: "GET /"
