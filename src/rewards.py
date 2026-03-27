@@ -157,10 +157,21 @@ def compute_step_reward(
             components["status_communication"] = 0.04
             total += 0.04
 
-    # -- Reasoning bonus (small credit for providing reasoning) -------------
+    # -- Reasoning bonus (content-aware: credit for mentioning relevant services) -
     if action.reasoning and len(action.reasoning) > 20:
-        components["reasoning_provided"] = 0.01
-        total += 0.01
+        reasoning_lower = action.reasoning.lower()
+        # Check if reasoning references any relevant service or root-cause keyword
+        mentions_relevant = any(
+            svc.lower() in reasoning_lower for svc in scenario.relevant_services
+        ) or any(
+            kw.lower() in reasoning_lower for kw in scenario.correct_root_cause_keywords
+        )
+        if mentions_relevant:
+            components["reasoning_relevant"] = 0.02
+            total += 0.02
+        else:
+            components["reasoning_provided"] = 0.005
+            total += 0.005
 
     total = _normalize(total)
     message_parts = [f"{k}: {v:+.3f}" for k, v in components.items()]

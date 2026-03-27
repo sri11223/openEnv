@@ -44,6 +44,50 @@ class Scenario:
     max_steps: int
     degradation_per_step: float = 0.0  # additional penalty per idle step
     relevant_services: List[str] = field(default_factory=list)
+    # Blast radius: maps service → metric key → (rate_per_step, cap) that
+    # worsens dynamically as the agent delays.  Applied before metrics are
+    # revealed so the agent observes a live, worsening picture.
+    # Format: {"service": {"metric_key": (delta_per_step, max_value)}}
+    blast_radius: Dict[str, Dict[str, tuple]] = field(default_factory=dict)
+
+
+def apply_blast_radius(scenario: Scenario, step: int) -> Dict[str, ServiceMetrics]:
+    """Return a copy of service_metrics with blast-radius degradation applied.
+
+    Each entry in scenario.blast_radius defines a (delta_per_step, cap) tuple
+    per metric key.  The returned dict can be used as revealed metrics so each
+    INVESTIGATE at a higher step number sees a more degraded system.
+    """
+    if not scenario.blast_radius:
+        return dict(scenario.service_metrics)
+
+    result: Dict[str, ServiceMetrics] = {}
+    for svc, base_metrics in scenario.service_metrics.items():
+        blast = scenario.blast_radius.get(svc)
+        if blast is None:
+            result[svc] = base_metrics
+            continue
+        # Build an updated custom dict
+        d = base_metrics.model_dump()
+        custom: Dict[str, float] = dict(d.get("custom") or {})
+        # Core fields we also allow to degrade
+        degradable_core = {
+            "error_rate", "latency_p50_ms", "latency_p99_ms",
+            "cpu_percent", "memory_percent", "request_rate",
+        }
+        for metric_key, (delta, cap) in blast.items():
+            if metric_key in degradable_core:
+                old_val = d.get(metric_key, 0.0)
+                new_val = min(cap, old_val + delta * step) if delta > 0 else max(cap, old_val + delta * step)
+                d[metric_key] = round(new_val, 3)
+            else:
+                # Custom metric field
+                old_val = custom.get(metric_key, 0.0)
+                new_val = min(cap, old_val + delta * step) if delta > 0 else max(cap, old_val + delta * step)
+                custom[metric_key] = round(new_val, 3)
+        d["custom"] = custom
+        result[svc] = ServiceMetrics(**d)
+    return result
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -126,6 +170,16 @@ _SCENARIO_EASY = Scenario(
     max_steps=10,
     degradation_per_step=0.005,
     relevant_services=["user-service", "postgres-primary"],
+    # Blast radius: connection pool fully saturates, user-service error rate climbs
+    blast_radius={
+        "postgres-primary": {
+            "connection_pool_pct": (0.5, 100.0),   # +0.5%/step → caps at 100%
+        },
+        "user-service": {
+            "error_rate": (0.02, 0.60),             # +2pp/step → caps at 60%
+            "latency_p99_ms": (200.0, 10000.0),     # +200ms/step → caps at 10s
+        },
+    },
 )
 
 
@@ -207,6 +261,20 @@ _SCENARIO_MEDIUM = Scenario(
     max_steps=15,
     degradation_per_step=0.01,
     relevant_services=["payment-gateway", "redis-session", "payment-processor"],
+    # Blast radius: Redis keeps evicting, payment success rate collapses
+    blast_radius={
+        "redis-session": {
+            "evictions_per_min": (150.0, 5000.0),  # +150 evictions/min/step
+            "memory_used_gb": (0.005, 4.0),         # creeps toward hard limit
+        },
+        "payment-gateway": {
+            "payment_success_rate": (-0.04, 0.05),  # drops 4pp/step → 5% floor
+            "error_rate": (0.03, 0.90),
+        },
+        "order-service": {
+            "error_rate": (0.02, 0.50),
+        },
+    },
 )
 
 
@@ -313,6 +381,25 @@ _SCENARIO_HARD = Scenario(
     max_steps=20,
     degradation_per_step=0.015,
     relevant_services=["auth-service", "api-gateway", "redis-auth-cache", "order-service"],
+    # Blast radius: auth-service OOMKills more often, order queue grows unbounded
+    blast_radius={
+        "auth-service": {
+            "memory_percent": (0.5, 100.0),        # +0.5%/step → OOM at 100%
+            "error_rate": (0.02, 0.95),             # cascades toward full outage
+            "latency_p99_ms": (100.0, 15000.0),
+            "pod_restarts": (0.3, 15.0),            # accumulating restarts
+        },
+        "order-service": {
+            "queue_depth": (1500.0, 100000.0),      # queue grows 1500/step
+            "error_rate": (0.02, 0.80),
+        },
+        "api-gateway": {
+            "error_rate": (0.015, 0.70),            # more requests fail over time
+        },
+        "user-service": {
+            "error_rate": (0.02, 0.80),
+        },
+    },
 )
 
 
@@ -447,13 +534,254 @@ _SCENARIO_MEDIUM_B = Scenario(
 )
 
 
+# ==========================================================================
+# SCENARIO 3-B – Hard variant: Kubernetes node pressure / pod eviction cascade
+# ==========================================================================
+
+_SCENARIO_HARD_B = Scenario(
+    scenario_id="k8s-node-pressure-001",
+    task_id="full_incident_management",
+    incident_id="INC-20260327-004",
+    description=(
+        "Multiple pods are being evicted across the cluster. The checkout "
+        "service is returning 502s, node-exporter reports memory pressure on "
+        "three nodes, and the HPA has been scaling aggressively. This is a "
+        "node-level resource exhaustion event triggered by an HPA/resource-limit "
+        "misconfiguration. Full incident management required."
+    ),
+    initial_alerts=[
+        _alert("ALT-200", "checkout-service", AlertSeverity.CRITICAL,
+               "502 error rate 28% across checkout endpoints", "2026-03-27T16:00:00Z"),
+        _alert("ALT-201", "k8s-node-01", AlertSeverity.CRITICAL,
+               "MemoryPressure=True — 3/8 pods evicted in last 5 min", "2026-03-27T16:00:30Z"),
+        _alert("ALT-202", "k8s-node-02", AlertSeverity.WARNING,
+               "MemoryPressure=True — node at 92% memory", "2026-03-27T16:01:00Z"),
+        _alert("ALT-203", "hpa-controller", AlertSeverity.WARNING,
+               "HPA for recommendation-service scaled to maxReplicas=20 (was 4)", "2026-03-27T15:55:00Z"),
+        _alert("ALT-204", "cart-service", AlertSeverity.WARNING,
+               "Downstream checkout-service returning 502s for 35% of cart completions", "2026-03-27T16:01:30Z"),
+        _alert("ALT-205", "cdn-static", AlertSeverity.INFO,
+               "Slight latency increase: p99 68ms (normal: 20ms)", "2026-03-27T16:02:00Z"),
+    ],
+    available_services=[
+        "checkout-service", "k8s-node-01", "k8s-node-02",
+        "recommendation-service", "cart-service", "hpa-controller",
+        "cdn-static", "postgres-checkout",
+    ],
+    service_logs={
+        "checkout-service": [
+            _log("2026-03-27T15:58:00Z", "checkout-service", "INFO", "Processing normally. 180 req/s."),
+            _log("2026-03-27T15:59:30Z", "checkout-service", "WARN", "3 pods restarting. Connections dropped."),
+            _log("2026-03-27T16:00:00Z", "checkout-service", "ERROR", "502 Bad Gateway — upstream recommendation-service pods unavailable"),
+            _log("2026-03-27T16:01:00Z", "checkout-service", "ERROR", "Circuit breaker half-open. 28% of requests failing."),
+        ],
+        "k8s-node-01": [
+            _log("2026-03-27T15:50:00Z", "k8s-node-01", "INFO", "Memory: 78%."),
+            _log("2026-03-27T15:53:00Z", "k8s-node-01", "WARN", "Memory: 88%. kubelet setting eviction threshold."),
+            _log("2026-03-27T15:56:00Z", "k8s-node-01", "ERROR", "Memory: 95%. OOM eviction beginning. Evicting low-priority pods."),
+            _log("2026-03-27T15:58:00Z", "k8s-node-01", "ERROR", "Evicted: recommendation-service-7d8f (2 GB). Memory: 91%."),
+            _log("2026-03-27T16:00:00Z", "k8s-node-01", "ERROR", "Memory back to 95%. HPA-spawned recommendation-service pods consuming all available memory."),
+        ],
+        "k8s-node-02": [
+            _log("2026-03-27T15:58:00Z", "k8s-node-02", "WARN", "Memory: 90%. recommendation-service HPA placed 6 new pods here."),
+            _log("2026-03-27T16:00:30Z", "k8s-node-02", "ERROR", "Memory: 92%. Approaching eviction threshold."),
+        ],
+        "recommendation-service": [
+            _log("2026-03-27T15:45:00Z", "recommendation-service", "INFO", "Memory usage tracking: v2.4.0 deployed. ML model loaded."),
+            _log("2026-03-27T15:50:00Z", "recommendation-service", "WARN", "Each pod consuming 2.1 GB (limit: 2.0 GB) — requests.memory too low."),
+            _log("2026-03-27T15:53:00Z", "recommendation-service", "WARN", "HPA triggered: latency spike caused scale-out. 8→12 pods"),
+            _log("2026-03-27T15:57:00Z", "recommendation-service", "ERROR", "HPA at maxReplicas=20. 20 pods × 2.1 GB = 42 GB on nodes with 32 GB capacity."),
+            _log("2026-03-27T16:00:00Z", "recommendation-service", "ERROR", "Pod eviction loop: evicted pods restart, consume memory, trigger eviction again."),
+        ],
+        "hpa-controller": [
+            _log("2026-03-27T15:52:00Z", "hpa-controller", "INFO", "recommendation-service: scaling 4→8 due to latency"),
+            _log("2026-03-27T15:55:00Z", "hpa-controller", "WARN", "recommendation-service: scaling 8→20 (maxReplicas). Memory requests underspecified."),
+            _log("2026-03-27T16:00:00Z", "hpa-controller", "ERROR", "Eviction loop detected. Scaling is worsening node pressure."),
+        ],
+        "cart-service": [
+            _log("2026-03-27T16:01:00Z", "cart-service", "WARN", "Checkout dependency failing. 35% cart completions blocked."),
+        ],
+        "cdn-static": [
+            _log("2026-03-27T16:02:00Z", "cdn-static", "INFO", "Slight latency increase correlates with client retries. No CDN-side issue."),
+        ],
+        "postgres-checkout": [
+            _log("2026-03-27T16:00:00Z", "postgres-checkout", "INFO", "All queries normal. Connections: 45/200."),
+        ],
+    },
+    service_metrics={
+        "checkout-service": _metrics("checkout-service", 55.0, 60.0, 180.0, 0.28, 200.0, 5500.0),
+        "k8s-node-01":       _metrics("k8s-node-01",       70.0, 95.0,   0.0, 0.0,   0.0,    0.0, evicted_pods=3.0),
+        "k8s-node-02":       _metrics("k8s-node-02",       65.0, 92.0,   0.0, 0.0,   0.0,    0.0),
+        "recommendation-service": _metrics("recommendation-service", 85.0, 105.0, 80.0, 0.60, 800.0, 12000.0, memory_per_pod_gb=2.1, pod_count=20.0),
+        "cart-service":      _metrics("cart-service",      30.0, 35.0, 250.0, 0.15,  90.0, 2200.0),
+        "hpa-controller":    _metrics("hpa-controller",    10.0, 15.0,   0.0, 0.0,   0.0,    0.0, current_replicas=20.0),
+        "cdn-static":        _metrics("cdn-static",        10.0, 12.0, 9000.0, 0.001, 12.0,  68.0),
+        "postgres-checkout": _metrics("postgres-checkout", 35.0, 48.0, 200.0, 0.001, 12.0,   38.0),
+    },
+    correct_severity=IncidentSeverity.P1,
+    correct_root_cause_service="recommendation-service",
+    correct_root_cause_keywords=[
+        "memory request", "resource limit", "hpa", "eviction loop", "pod eviction",
+        "memory limit", "recommendation-service memory", "node pressure",
+        "oom eviction", "hpa scale", "memory requests underspecified",
+    ],
+    valid_remediation_actions=[
+        {"action": "config_change", "service": "recommendation-service"},
+        {"action": "scale",         "service": "recommendation-service"},
+        {"action": "restart",       "service": "recommendation-service"},
+        {"action": "config_change", "service": "hpa-controller"},
+    ],
+    expected_escalation_teams=["platform-team", "sre-team", "ml-team"],
+    max_steps=20,
+    degradation_per_step=0.015,
+    relevant_services=["recommendation-service", "k8s-node-01", "hpa-controller", "checkout-service"],
+    blast_radius={
+        "recommendation-service": {
+            "error_rate": (0.03, 0.95),
+            "pod_count":  (0.5,  20.0),
+        },
+        "k8s-node-01": {
+            "memory_percent": (0.4, 100.0),
+            "evicted_pods":   (0.4,  20.0),
+        },
+        "k8s-node-02": {
+            "memory_percent": (0.5, 100.0),
+        },
+        "checkout-service": {
+            "error_rate": (0.025, 0.85),
+        },
+    },
+)
+
+
+# ==========================================================================
+# SCENARIO 3-C – Hard variant: Database failover split-brain
+# ==========================================================================
+
+_SCENARIO_HARD_C = Scenario(
+    scenario_id="db-failover-race-001",
+    task_id="full_incident_management",
+    incident_id="INC-20260327-005",
+    description=(
+        "The primary PostgreSQL instance failed over to the replica 18 minutes "
+        "ago but several services still route writes to the old primary (now "
+        "read-only) because pgbouncer's connection string was never updated. "
+        "A split-brain scenario is actively corrupting order state. Full "
+        "incident commander workflow required: triage, diagnose, remediate, "
+        "escalate, communicate."
+    ),
+    initial_alerts=[
+        _alert("ALT-300", "order-service", AlertSeverity.CRITICAL,
+               "Write failures: 65% of order commits failing with ReadOnlyError", "2026-03-27T18:10:00Z"),
+        _alert("ALT-301", "postgres-primary-old", AlertSeverity.CRITICAL,
+               "Instance is READ-ONLY (promoted replica took writes 18 min ago)", "2026-03-27T18:10:30Z"),
+        _alert("ALT-302", "postgres-replica-new", AlertSeverity.WARNING,
+               "Becoming primary: only 30% of expected write traffic received", "2026-03-27T18:11:00Z"),
+        _alert("ALT-303", "payment-service", AlertSeverity.WARNING,
+               "Double-charge risk: orders appearing in both DB instances for 8% of txns", "2026-03-27T18:11:30Z"),
+        _alert("ALT-304", "inventory-service", AlertSeverity.WARNING,
+               "Stock deduction failing silently: items over-sold", "2026-03-27T18:12:00Z"),
+        _alert("ALT-305", "monitoring-dashboard", AlertSeverity.INFO,
+               "DB failover event recorded at 2026-03-27T17:52:00Z", "2026-03-27T18:12:30Z"),
+    ],
+    available_services=[
+        "order-service", "postgres-primary-old", "postgres-replica-new",
+        "payment-service", "inventory-service", "config-service",
+        "monitoring-dashboard", "pgbouncer",
+    ],
+    service_logs={
+        "order-service": [
+            _log("2026-03-27T17:52:00Z", "order-service", "WARN", "DB failover detected. Using cached connection string."),
+            _log("2026-03-27T17:55:00Z", "order-service", "ERROR", "INSERT failed: ERROR: cannot execute INSERT in a read-only transaction"),
+            _log("2026-03-27T18:00:00Z", "order-service", "ERROR", "65% of order writes failing. Service still pointing to old primary."),
+            _log("2026-03-27T18:10:00Z", "order-service", "ERROR", "Connection pool: all connections to postgres-primary-old. Failover not propagated."),
+        ],
+        "postgres-primary-old": [
+            _log("2026-03-27T17:52:00Z", "postgres-primary-old", "WARN", "Promotion event: replica assumed primary role. This instance now read-only."),
+            _log("2026-03-27T18:05:00Z", "postgres-primary-old", "ERROR", "Receiving 1800 write attempts/min from services — all rejected (read-only)."),
+            _log("2026-03-27T18:10:00Z", "postgres-primary-old", "ERROR", "Active connections: 198/200. Service retry loops filling pool."),
+        ],
+        "postgres-replica-new": [
+            _log("2026-03-27T17:52:00Z", "postgres-replica-new", "INFO", "Promoted to primary. Accepting writes."),
+            _log("2026-03-27T18:05:00Z", "postgres-replica-new", "WARN", "Only 30% of expected write traffic received. Split-brain suspected."),
+            _log("2026-03-27T18:10:00Z", "postgres-replica-new", "WARN", "Diverging from old primary: 1240 transactions only in new primary."),
+        ],
+        "payment-service": [
+            _log("2026-03-27T18:05:00Z", "payment-service", "ERROR", "Idempotency check failing: order state inconsistent between DB instances"),
+            _log("2026-03-27T18:10:00Z", "payment-service", "ERROR", "8% txn double-charge risk. Halting charge processing for affected orders."),
+        ],
+        "inventory-service": [
+            _log("2026-03-27T18:05:00Z", "inventory-service", "ERROR", "Stock deduction writes going to old primary (read-only) — silently lost."),
+            _log("2026-03-27T18:10:00Z", "inventory-service", "ERROR", "Oversold items: 340 SKUs with negative virtual stock. Revenue impact growing."),
+        ],
+        "config-service": [
+            _log("2026-03-27T17:52:00Z", "config-service", "INFO", "DB failover event received. Updated DB_PRIMARY_HOST in config store."),
+            _log("2026-03-27T17:52:30Z", "config-service", "WARN", "Config propagation: order-service and payment-service did NOT acknowledge new config."),
+            _log("2026-03-27T17:55:00Z", "config-service", "ERROR", "Config ack missing for 4/8 services. Manual pgbouncer reload required."),
+        ],
+        "pgbouncer": [
+            _log("2026-03-27T17:52:00Z", "pgbouncer", "WARN", "Failover detected. pgbouncer config NOT auto-updated (static connection string)."),
+            _log("2026-03-27T18:10:00Z", "pgbouncer", "ERROR", "Routing 100% of writes to postgres-primary-old (read-only). Update target_db required immediately."),
+        ],
+        "monitoring-dashboard": [
+            _log("2026-03-27T17:52:00Z", "monitoring-dashboard", "INFO", "Auto-failover triggered at 17:52:00Z by health check failure on primary."),
+            _log("2026-03-27T18:12:00Z", "monitoring-dashboard", "INFO", "Split-brain duration: 18 min. Financial impact estimate: $42,000 in at-risk transactions."),
+        ],
+    },
+    service_metrics={
+        "order-service":         _metrics("order-service",         55.0, 60.0,  800.0, 0.65, 300.0,  8000.0, write_failure_rate=0.65),
+        "postgres-primary-old":  _metrics("postgres-primary-old",  80.0, 70.0, 1800.0, 1.0,    5.0,    50.0, is_read_only=1.0, connection_pct=99.0),
+        "postgres-replica-new":  _metrics("postgres-replica-new",  30.0, 45.0,  600.0, 0.0,    8.0,    30.0, write_pct_expected=0.30),
+        "payment-service":       _metrics("payment-service",       40.0, 45.0,  200.0, 0.25, 180.0,  3500.0, double_charge_risk_pct=0.08),
+        "inventory-service":     _metrics("inventory-service",     35.0, 40.0,  300.0, 0.30, 120.0,  2500.0, oversold_skus=340.0),
+        "config-service":        _metrics("config-service",        15.0, 20.0,   50.0, 0.10,  30.0,   200.0),
+        "monitoring-dashboard":  _metrics("monitoring-dashboard",  10.0, 15.0,  100.0, 0.0,   50.0,   150.0),
+        "pgbouncer":             _metrics("pgbouncer",             25.0, 30.0, 2000.0, 0.65,   2.0,     8.0, routing_to_old_primary=1.0),
+    },
+    correct_severity=IncidentSeverity.P1,
+    correct_root_cause_service="pgbouncer",
+    correct_root_cause_keywords=[
+        "pgbouncer", "connection string", "split-brain", "failover", "read-only",
+        "config not propagated", "stale connection", "db routing", "pgbouncer config",
+        "connection pool routing", "failover not propagated",
+    ],
+    valid_remediation_actions=[
+        {"action": "config_change", "service": "pgbouncer"},
+        {"action": "restart",       "service": "order-service"},
+        {"action": "config_change", "service": "order-service"},
+        {"action": "restart",       "service": "payment-service"},
+    ],
+    expected_escalation_teams=["database-team", "payments-team", "on-call-lead", "platform-team"],
+    max_steps=20,
+    degradation_per_step=0.02,
+    relevant_services=["pgbouncer", "postgres-primary-old", "postgres-replica-new", "order-service"],
+    blast_radius={
+        "order-service": {
+            "write_failure_rate": (0.02, 1.0),
+            "error_rate":         (0.02, 0.95),
+        },
+        "inventory-service": {
+            "oversold_skus":      (25.0, 5000.0),
+            "error_rate":         (0.02, 0.80),
+        },
+        "payment-service": {
+            "double_charge_risk_pct": (0.005, 0.30),
+            "error_rate":             (0.02,  0.60),
+        },
+        "postgres-primary-old": {
+            "connection_pct": (0.2, 100.0),
+        },
+    },
+)
+
+
 # ---- registry ---------------------------------------------------------------
 
 # Multiple variants per task — environment randomly selects one per reset()
 SCENARIO_VARIANTS: Dict[str, List[Scenario]] = {
     "severity_classification": [_SCENARIO_EASY, _SCENARIO_EASY_B],
     "root_cause_analysis": [_SCENARIO_MEDIUM, _SCENARIO_MEDIUM_B],
-    "full_incident_management": [_SCENARIO_HARD],
+    "full_incident_management": [_SCENARIO_HARD, _SCENARIO_HARD_B, _SCENARIO_HARD_C],
 }
 
 # Always maps task_id → primary (deterministic) scenario for testing/baseline

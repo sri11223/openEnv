@@ -58,10 +58,12 @@ def grade_severity_classification(state: EnvironmentState, scenario: Scenario) -
     else:
         breakdown["investigation_quality"] = 0.0
 
-    # 3. Efficiency (0.25) – fewer steps is better
+    # 3. Efficiency (0.25) – fewer steps is better; 0 steps = no credit
     max_s = scenario.max_steps
     used = state.total_steps_taken
-    if used <= 3:
+    if used == 0:
+        breakdown["efficiency"] = 0.0
+    elif used <= 3:
         breakdown["efficiency"] = 0.25
     elif used <= 5:
         breakdown["efficiency"] = 0.20
@@ -133,11 +135,13 @@ def grade_root_cause_analysis(state: EnvironmentState, scenario: Scenario) -> Gr
     else:
         breakdown["remediation_quality"] = 0.0
 
-    # 5. Efficiency (0.20)
+    # 5. Efficiency (0.20); 0 steps = no credit
     max_s = scenario.max_steps
     used = state.total_steps_taken
-    ratio = used / max_s
-    if ratio <= 0.4:
+    ratio = used / max_s if used > 0 else 1.0
+    if used == 0:
+        breakdown["efficiency"] = 0.0
+    elif ratio <= 0.4:
         breakdown["efficiency"] = 0.20
     elif ratio <= 0.6:
         breakdown["efficiency"] = 0.15
@@ -179,15 +183,22 @@ def _rca_feedback(bd: Dict[str, float]) -> str:
 def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) -> GraderResult:
     breakdown: Dict[str, float] = {}
 
+    # Pre-compute whether agent actually investigated root-cause service
+    investigated_root_cause = scenario.correct_root_cause_service in state.investigated_services
+
     # 1. Correct severity (0.12)
     sev_dist = _severity_distance(state.severity_classified, scenario.correct_severity)
     breakdown["severity_accuracy"] = 0.12 if sev_dist == 0 else (0.06 if sev_dist == 1 else 0.0)
 
-    # 2. Root cause identified (0.18)
+    # 2. Root cause identified (0.20)
+    # Diagnosis without investigation gets at most 0.06 (prompted guess, not evidence-based)
     if state.diagnosis and _keyword_match(state.diagnosis, scenario.correct_root_cause_keywords):
-        breakdown["diagnosis_accuracy"] = 0.18
+        if investigated_root_cause:
+            breakdown["diagnosis_accuracy"] = 0.20
+        else:
+            breakdown["diagnosis_accuracy"] = 0.06   # guessed correctly but didn't look
     elif state.diagnosis:
-        breakdown["diagnosis_accuracy"] = 0.04
+        breakdown["diagnosis_accuracy"] = 0.03
     else:
         breakdown["diagnosis_accuracy"] = 0.0
 
@@ -205,26 +216,26 @@ def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) 
     else:
         breakdown["remediation_quality"] = 0.0
 
-    # 4. Escalation (0.14)
+    # 4. Escalation (0.15) — raised from 0.08/0.14 cap
     expected_lower = {t.lower() for t in scenario.expected_escalation_teams}
     escalated_lower = {e.lower() for e in state.escalations_made}
     matched = len(escalated_lower & expected_lower)
     if matched >= 2:
-        breakdown["escalation_quality"] = 0.14
+        breakdown["escalation_quality"] = 0.15
     elif matched == 1:
-        breakdown["escalation_quality"] = 0.08
+        breakdown["escalation_quality"] = 0.09
     else:
         breakdown["escalation_quality"] = 0.0
 
-    # 5. Communication (0.13)
+    # 5. Communication (0.10)
     if len(state.communications_sent) >= 2:
-        breakdown["communication"] = 0.13
+        breakdown["communication"] = 0.10
     elif len(state.communications_sent) == 1:
-        breakdown["communication"] = 0.07
+        breakdown["communication"] = 0.06
     else:
         breakdown["communication"] = 0.0
 
-    # 6. Investigation thoroughness (0.12)
+    # 6. Investigation thoroughness (0.15)
     relevant_investigated = len(
         set(state.investigated_services) & set(scenario.relevant_services)
     )
@@ -233,18 +244,19 @@ def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) 
         inv_ratio = relevant_investigated / total_relevant
     else:
         inv_ratio = 0.0
-    breakdown["investigation_thoroughness"] = round(0.12 * inv_ratio, 4)
+    breakdown["investigation_thoroughness"] = round(0.15 * inv_ratio, 4)
 
-    # 7. Efficiency (0.13)
+    # 7. Efficiency (0.10); 0 steps = no credit
     max_s = scenario.max_steps
     used = state.total_steps_taken
-    ratio = used / max_s
-    if ratio <= 0.5:
-        breakdown["efficiency"] = 0.13
-    elif ratio <= 0.7:
-        breakdown["efficiency"] = 0.09
-    elif ratio <= 0.85:
-        breakdown["efficiency"] = 0.05
+    if used == 0:
+        breakdown["efficiency"] = 0.0
+    elif used <= int(max_s * 0.5):
+        breakdown["efficiency"] = 0.10
+    elif used <= int(max_s * 0.7):
+        breakdown["efficiency"] = 0.07
+    elif used <= int(max_s * 0.85):
+        breakdown["efficiency"] = 0.04
     else:
         breakdown["efficiency"] = 0.0
 
@@ -259,15 +271,17 @@ def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) 
 
 def _full_feedback(bd: Dict[str, float]) -> str:
     parts = []
-    if bd.get("diagnosis_accuracy", 0) >= 0.18:
-        parts.append("Root cause correctly identified.")
+    if bd.get("diagnosis_accuracy", 0) >= 0.20:
+        parts.append("Root cause correctly identified with evidence from investigation.")
+    elif bd.get("diagnosis_accuracy", 0) >= 0.06:
+        parts.append("Root cause guessed correctly but not confirmed by investigation.")
     else:
         parts.append("Root cause not identified or inaccurate.")
     if bd.get("remediation_quality", 0) >= 0.12:
         parts.append("Good remediation actions taken.")
     else:
         parts.append("Remediation insufficient.")
-    if bd.get("escalation_quality", 0) >= 0.08:
+    if bd.get("escalation_quality", 0) >= 0.09:
         parts.append("Appropriate escalation made.")
     else:
         parts.append("Escalation missing or misdirected.")

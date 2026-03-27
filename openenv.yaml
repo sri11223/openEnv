@@ -156,17 +156,37 @@ reward:
       value: -0.005 to -0.015 per step
       description: "Per-step urgency penalty that scales with incident severity."
     - name: reasoning_bonus
-      value: +0.01
-      description: "Non-empty action reasoning field."
+      value: +0.005 to +0.02
+      description: "Non-empty reasoning field; higher bonus when relevant services or keywords are mentioned."
 
 endpoints:
-  reset: "POST /reset"
-  step: "POST /step"
-  state: "GET /state"
-  tasks: "GET /tasks"
-  grader: "POST /grader"
-  baseline: "POST /baseline"
-  metrics: "GET /metrics"
-  render: "GET /render"
-  leaderboard: "GET /leaderboard"
-  health: "GET /"
+  - path: /reset
+    method: POST
+    description: "Start a new episode for the specified task_id."
+  - path: /step
+    method: POST
+    description: "Submit an action and receive the next observation and reward."
+  - path: /state
+    method: GET
+    description: "Retrieve the full internal state snapshot (includes alerts, history, scores)."
+  - path: /tasks
+    method: GET
+    description: "List all available tasks with metadata."
+  - path: /grader
+    method: POST
+    description: "Grade the current (or a completed) episode and return a score breakdown."
+  - path: /baseline
+    method: POST
+    description: "Run a deterministic rule-based baseline agent on a task."
+  - path: /metrics
+    method: GET
+    description: "Prometheus-style metrics endpoint."
+  - path: /render
+    method: GET
+    description: "HTML render of the current incident state."
+  - path: /leaderboard
+    method: GET
+    description: "Return top-N episode scores."
+  - path: /
+    method: GET
+    description: "Health check — returns 200 OK."

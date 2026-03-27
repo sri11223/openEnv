@@ -165,6 +165,7 @@ class EnvironmentState(BaseModel):
     done: bool
     cumulative_reward: float
     total_steps_taken: int
+    alerts: List[Alert] = Field(default_factory=list)
     actions_history: List[Dict[str, Any]] = Field(default_factory=list)
     severity_classified: Optional[IncidentSeverity] = None
     diagnosis: Optional[str] = None

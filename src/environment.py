@@ -25,7 +25,7 @@ from src.models import (
     StepResult,
 )
 from src.rewards import compute_step_reward
-from src.scenarios import Scenario, get_scenario
+from src.scenarios import Scenario, apply_blast_radius, get_scenario
 
 
 class IncidentResponseEnv:
@@ -157,6 +157,7 @@ class IncidentResponseEnv:
             done=self._done,
             cumulative_reward=round(self._cumulative_reward, 4),
             total_steps_taken=self._step,
+            alerts=list(self._scenario.initial_alerts) if self._scenario else [],
             actions_history=copy.deepcopy(self._actions_history),
             severity_classified=self._severity_classified,
             diagnosis=self._diagnosis,
@@ -192,15 +193,17 @@ class IncidentResponseEnv:
             elif target in self._investigated:
                 self._last_message = f"Already investigated {target}. Logs and metrics available."
             else:
-                # Reveal logs and metrics
+                # Reveal logs (always static — logs are historical records)
                 if target in scenario.service_logs:
                     self._revealed_logs[target] = [
                         entry.model_dump() for entry in scenario.service_logs[target]
                     ]
-                if target in scenario.service_metrics:
-                    self._revealed_metrics[target] = scenario.service_metrics[target].model_dump()
+                # Reveal LIVE metrics with blast-radius degradation applied
+                live_metrics = apply_blast_radius(scenario, self._step)
+                if target in live_metrics:
+                    self._revealed_metrics[target] = live_metrics[target].model_dump()
                 self._last_message = (
-                    f"Investigation of {target} complete. Logs and metrics now available."
+                    f"Investigation of {target} complete. Logs and live metrics now available."
                 )
                 if self._incident_status == IncidentStatus.OPEN:
                     self._incident_status = IncidentStatus.INVESTIGATING
