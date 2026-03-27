@@ -176,21 +176,55 @@ docker run -p 7860:7860 incident-response-triage
 
 ### Hugging Face Spaces
 
-Deploy as a Docker Space tagged with `openenv`. The Dockerfile is configured to expose port 7860.
+This environment is deployed as a Docker Space. To deploy your own copy:
+
+1. Go to [huggingface.co/new-space](https://huggingface.co/new-space)
+2. Choose **Docker** as the SDK
+3. Set the Space name and add tag `openenv`
+4. In the Space settings, link this repository (or push directly)
+5. HF Spaces will run `docker build` then `docker run` automatically
+
+The container exposes port **7860** as required by HF Spaces.
+
+```bash
+# Test the deployed space
+curl https://<your-username>-incident-response-triage.hf.space/
+```
 
 ---
 
 ## API Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/` | Health check |
-| POST | `/reset` | Reset environment for a task (`{"task_id": "..."}`) |
-| POST | `/step` | Take an action (Action JSON body) |
-| GET | `/state` | Full environment state snapshot |
-| GET | `/tasks` | List tasks with action schema |
-| POST | `/grader` | Get grader score for current episode |
-| POST | `/baseline` | Run baseline inference on all tasks |
+| Method | Path | Headers | Description |
+|--------|------|---------|-------------|
+| `GET` | `/` | — | Health check + telemetry summary |
+| `POST` | `/reset` | — | Start new episode; returns initial observation **and** `session_id` |
+| `POST` | `/step` | `X-Session-ID` | Take an action; returns observation, reward, done, info |
+| `GET` | `/state` | `X-Session-ID` | Full environment state snapshot |
+| `GET` | `/tasks` | — | List tasks with action schema |
+| `POST` | `/grader` | `X-Session-ID` | Grader score for current/completed episode |
+| `POST` | `/baseline` | — | Run rule-based baseline on all tasks (in-process) |
+| `GET` | `/metrics` | — | Telemetry counters (JSON or `?format=prometheus`) |
+| `GET` | `/render` | `X-Session-ID` | Human-readable Markdown incident dashboard |
+| `GET` | `/leaderboard` | — | Top-10 scores per task from completed episodes |
+
+> **Session flow:** `/reset` returns a `session_id`. Pass it as the `X-Session-ID` HTTP header on all subsequent `/step`, `/state`, `/grader`, and `/render` calls. This enables safe concurrent multi-agent evaluation.
+
+```bash
+# 1. Start episode
+SESSION=$(curl -s -X POST http://localhost:7860/reset \
+  -H 'Content-Type: application/json' \
+  -d '{"task_id": "severity_classification"}' | python -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+
+# 2. Take a step
+curl -X POST http://localhost:7860/step \
+  -H 'Content-Type: application/json' \
+  -H "X-Session-ID: $SESSION" \
+  -d '{"action_type": "investigate", "target": "postgres-primary", "parameters": {}, "reasoning": "check connection pool"}'
+
+# 3. Grade the episode
+curl -X POST http://localhost:7860/grader -H "X-Session-ID: $SESSION"
+```
 
 ---
 
@@ -198,12 +232,12 @@ Deploy as a Docker Space tagged with `openenv`. The Dockerfile is configured to 
 
 | Task | Score | Steps |
 |------|-------|-------|
-| severity_classification | ~0.95 | 3 |
-| root_cause_analysis | ~0.85 | 5 |
-| full_incident_management | ~0.85 | 11 |
-| **Mean** | **~0.88** | — |
+| severity_classification | **1.00** | 3 |
+| root_cause_analysis | **1.00** | 5 |
+| full_incident_management | **0.91** | 10 |
+| **Mean** | **0.97** | — |
 
-These scores represent a near-optimal deterministic policy. An LLM agent typically scores lower due to reasoning errors and inefficiency.
+These scores represent a near-optimal deterministic policy. An LLM agent typically scores lower due to reasoning errors and sub-optimal action ordering.
 
 ---
 
