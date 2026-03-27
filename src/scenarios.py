@@ -316,8 +316,147 @@ _SCENARIO_HARD = Scenario(
 )
 
 
+# ==========================================================================
+# SCENARIO 1-B – Easy variant: Disk space exhaustion on log volume
+# ==========================================================================
+
+_SCENARIO_EASY_B = Scenario(
+    scenario_id="disk-full-001",
+    task_id="severity_classification",
+    incident_id="INC-20260327-101",
+    description=(
+        "The search-service and its underlying Elasticsearch cluster are "
+        "experiencing errors. Alerts indicate disk usage is critically high. "
+        "Classify the incident severity."
+    ),
+    initial_alerts=[
+        _alert("ALT-201", "elasticsearch", AlertSeverity.CRITICAL,
+               "Disk usage at 95% on data node es-node-01", "2026-03-27T06:10:00Z"),
+        _alert("ALT-202", "search-service", AlertSeverity.WARNING,
+               "Bulk indexing failures: 400% increase", "2026-03-27T06:10:30Z"),
+        _alert("ALT-203", "elasticsearch", AlertSeverity.WARNING,
+               "write.low_watermark crossed – shard allocation blocked", "2026-03-27T06:09:00Z"),
+    ],
+    available_services=["search-service", "elasticsearch", "kibana", "log-aggregator"],
+    service_logs={
+        "search-service": [
+            _log("2026-03-27T06:08:00Z", "search-service", "WARN", "Indexing queue backing up: 12000 documents pending"),
+            _log("2026-03-27T06:09:00Z", "search-service", "ERROR", "BulkIndexException: ClusterBlockException[blocked: FORBIDDEN/12/index]"),
+            _log("2026-03-27T06:10:00Z", "search-service", "ERROR", "Search degraded – last index refresh 8 min ago. Serving stale results."),
+        ],
+        "elasticsearch": [
+            _log("2026-03-27T06:05:00Z", "elasticsearch", "WARN", "Disk usage: 90% on es-node-01. Threshold: 85%."),
+            _log("2026-03-27T06:07:00Z", "elasticsearch", "WARN", "Disk: 93%. flood_stage watermark approaching."),
+            _log("2026-03-27T06:09:00Z", "elasticsearch", "ERROR", "Disk: 95%. flood_stage reached. All indices set to read-only."),
+            _log("2026-03-27T06:10:00Z", "elasticsearch", "ERROR", "Shard allocation disabled. Cluster status: YELLOW. Write ops blocked."),
+        ],
+        "kibana": [
+            _log("2026-03-27T06:10:00Z", "kibana", "INFO", "Dashboard loading normally. Read-only ops unaffected."),
+        ],
+        "log-aggregator": [
+            _log("2026-03-27T06:09:00Z", "log-aggregator", "WARN", "Log shipping to elasticsearch failing. Retrying. Buffer: 50000 lines."),
+        ],
+    },
+    service_metrics={
+        "search-service": _metrics("search-service", 42.0, 50.0, 200.0, 0.35, 180.0, 2200.0),
+        "elasticsearch": _metrics("elasticsearch", 60.0, 80.0, 50.0, 0.40, 200.0, 5000.0, disk_pct=95.0),
+        "kibana": _metrics("kibana", 15.0, 25.0, 30.0, 0.0, 90.0, 350.0),
+        "log-aggregator": _metrics("log-aggregator", 25.0, 35.0, 300.0, 0.15, 50.0, 400.0),
+    },
+    correct_severity=IncidentSeverity.P2,
+    correct_root_cause_service="elasticsearch",
+    correct_root_cause_keywords=["disk", "disk full", "disk space", "flood_stage", "watermark", "read-only", "disk usage"],
+    valid_remediation_actions=[
+        {"action": "config_change", "service": "elasticsearch", "detail": "clear read-only flag"},
+        {"action": "scale", "service": "elasticsearch"},
+    ],
+    expected_escalation_teams=["infrastructure-team"],
+    max_steps=10,
+    degradation_per_step=0.005,
+    relevant_services=["search-service", "elasticsearch"],
+)
+
+
+# ==========================================================================
+# SCENARIO 2-B – Medium variant: Slow memory leak in background worker
+# ==========================================================================
+
+_SCENARIO_MEDIUM_B = Scenario(
+    scenario_id="worker-memleak-001",
+    task_id="root_cause_analysis",
+    incident_id="INC-20260327-102",
+    description=(
+        "The report-generation service is timing out and users cannot export "
+        "data. Multiple related services show elevated errors. Find the true "
+        "root cause, classify severity, diagnose, and remediate."
+    ),
+    initial_alerts=[
+        _alert("ALT-210", "report-service", AlertSeverity.CRITICAL,
+               "Request timeout rate 60% for /api/export", "2026-03-27T11:20:00Z"),
+        _alert("ALT-211", "worker-pool", AlertSeverity.WARNING,
+               "Worker memory usage: 94% (4 of 5 workers OOMKilling)", "2026-03-27T11:19:00Z"),
+        _alert("ALT-212", "s3-upload", AlertSeverity.WARNING,
+               "Upload failures – 503s from report-service", "2026-03-27T11:20:30Z"),
+        _alert("ALT-213", "postgres-reports", AlertSeverity.INFO,
+               "Long-running queries detected: 5 queries > 10 s", "2026-03-27T11:18:00Z"),
+    ],
+    available_services=["report-service", "worker-pool", "s3-upload", "postgres-reports", "redis-cache", "api-gateway"],
+    service_logs={
+        "report-service": [
+            _log("2026-03-27T11:15:00Z", "report-service", "INFO", "Report job queued: RPT-9981, format: xlsx, rows: 1M"),
+            _log("2026-03-27T11:16:00Z", "report-service", "WARN", "Worker RPT-9981 memory: 2.1 GB (limit 2 GB). Nearing OOM."),
+            _log("2026-03-27T11:18:00Z", "report-service", "ERROR", "Worker OOMKilled during xlsx serialization. Job failed."),
+            _log("2026-03-27T11:19:00Z", "report-service", "ERROR", "3 concurrent OOMKills. Export endpoint returning 503."),
+        ],
+        "worker-pool": [
+            _log("2026-03-27T11:10:00Z", "worker-pool", "INFO", "Workers: 5 active, 0 idle. Load: nominal."),
+            _log("2026-03-27T11:14:00Z", "worker-pool", "WARN", "Worker memory climbing. Suspected unbounded row accumulation in xlsx writer."),
+            _log("2026-03-27T11:17:00Z", "worker-pool", "ERROR", "Worker #3 OOMKilled. Memory at 100%."),
+            _log("2026-03-27T11:19:00Z", "worker-pool", "ERROR", "4/5 workers OOMKilled. Effective worker capacity: 1. Queue depth: 45."),
+            _log("2026-03-27T11:19:30Z", "worker-pool", "ERROR", "Root cause: xlsx writer buffers all rows in memory before flushing. No streaming."),
+        ],
+        "s3-upload": [
+            _log("2026-03-27T11:20:00Z", "s3-upload", "WARN", "Upstream report-service returning 503. S3 uploads queued."),
+        ],
+        "postgres-reports": [
+            _log("2026-03-27T11:17:00Z", "postgres-reports", "INFO", "Large sequential scan for 1M row export. Query time: 12 s. This is normal for large exports."),
+        ],
+        "redis-cache": [_log("2026-03-27T11:20:00Z", "redis-cache", "INFO", "Operations normal.")],
+        "api-gateway": [_log("2026-03-27T11:20:00Z", "api-gateway", "WARN", "report-service upstream: 60% 503 errors.")],
+    },
+    service_metrics={
+        "report-service": _metrics("report-service", 55.0, 75.0, 10.0, 0.60, 8000.0, 30000.0),
+        "worker-pool": _metrics("worker-pool", 90.0, 94.0, 5.0, 0.80, 15000.0, 60000.0, oom_kills=4.0),
+        "s3-upload": _metrics("s3-upload", 10.0, 15.0, 2.0, 0.60, 500.0, 3000.0),
+        "postgres-reports": _metrics("postgres-reports", 55.0, 60.0, 15.0, 0.0, 200.0, 12000.0),
+        "redis-cache": _metrics("redis-cache", 12.0, 30.0, 500.0, 0.0, 1.0, 3.0),
+        "api-gateway": _metrics("api-gateway", 20.0, 28.0, 800.0, 0.08, 80.0, 2000.0),
+    },
+    correct_severity=IncidentSeverity.P2,
+    correct_root_cause_service="worker-pool",
+    correct_root_cause_keywords=["memory", "oom", "out of memory", "xlsx", "buffering", "unbounded", "memory leak", "worker memory"],
+    valid_remediation_actions=[
+        {"action": "restart", "service": "worker-pool"},
+        {"action": "scale", "service": "worker-pool"},
+        {"action": "config_change", "service": "worker-pool", "detail": "enable streaming"},
+    ],
+    expected_escalation_teams=["backend-team", "platform-team"],
+    max_steps=15,
+    degradation_per_step=0.008,
+    relevant_services=["report-service", "worker-pool"],
+)
+
+
 # ---- registry ---------------------------------------------------------------
 
+# Multiple variants per task — environment randomly selects one per reset()
+SCENARIO_VARIANTS: Dict[str, List[Scenario]] = {
+    "severity_classification": [_SCENARIO_EASY, _SCENARIO_EASY_B],
+    "root_cause_analysis": [_SCENARIO_MEDIUM, _SCENARIO_MEDIUM_B],
+    "full_incident_management": [_SCENARIO_HARD],
+}
+
+# Always maps task_id → primary (deterministic) scenario for testing/baseline
 SCENARIOS: Dict[str, Scenario] = {
     "severity_classification": _SCENARIO_EASY,
     "root_cause_analysis": _SCENARIO_MEDIUM,
@@ -325,7 +464,15 @@ SCENARIOS: Dict[str, Scenario] = {
 }
 
 
-def get_scenario(task_id: str) -> Scenario:
-    if task_id not in SCENARIOS:
-        raise ValueError(f"Unknown task_id '{task_id}'. Valid: {list(SCENARIOS.keys())}")
-    return SCENARIOS[task_id]
+def get_scenario(task_id: str, variant_seed: int = 0) -> Scenario:
+    """Return a scenario for the given task_id.
+
+    Args:
+        task_id:      One of the three registered task IDs.
+        variant_seed: Index into SCENARIO_VARIANTS[task_id]. Wraps around.
+                      Pass 0 for the primary/deterministic scenario.
+    """
+    if task_id not in SCENARIO_VARIANTS:
+        raise ValueError(f"Unknown task_id '{task_id}'. Valid: {list(SCENARIO_VARIANTS.keys())}")
+    variants = SCENARIO_VARIANTS[task_id]
+    return variants[variant_seed % len(variants)]

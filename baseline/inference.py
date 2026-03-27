@@ -258,9 +258,11 @@ def _run_http(
     """Run episode against the HTTP API."""
     client = httpx.Client(base_url=base_url, timeout=30.0)
 
-    # Reset
+    # Reset — capture session_id for all subsequent calls
     resp = client.post("/reset", json={"task_id": task_id})
     resp.raise_for_status()
+    session_id = resp.json()["session_id"]
+    headers = {"X-Session-ID": session_id}
 
     total_reward = 0.0
     steps = 0
@@ -269,7 +271,7 @@ def _run_http(
     for act_dict in actions:
         if done:
             break
-        resp = client.post("/step", json=act_dict)
+        resp = client.post("/step", json=act_dict, headers=headers)
         resp.raise_for_status()
         result = resp.json()
         total_reward += result["reward"]["value"]
@@ -277,7 +279,7 @@ def _run_http(
         done = result["done"]
 
     # Get grader score
-    resp = client.post("/grader")
+    resp = client.post("/grader", headers=headers)
     resp.raise_for_status()
     grader = resp.json()
 

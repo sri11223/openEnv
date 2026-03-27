@@ -13,11 +13,12 @@ Endpoints:
 from __future__ import annotations
 
 import os
+import secrets
 import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -27,10 +28,29 @@ from src.tasks import get_all_tasks
 
 
 # ---------------------------------------------------------------------------
-# Application state
+# Session-isolated environment registry
 # ---------------------------------------------------------------------------
+# Each session_id maps to its own IncidentResponseEnv instance.
+# Clients receive a session_id on /reset and must pass it via the
+# X-Session-ID header (or query param) on subsequent calls.
+# This makes the server safe for concurrent multi-agent evaluation.
 
-env = IncidentResponseEnv()
+_SESSION_REGISTRY: Dict[str, IncidentResponseEnv] = {}
+_MAX_SESSIONS = 256  # cap to avoid unbounded memory growth
+
+
+def _get_or_create_session(session_id: str | None) -> tuple[str, IncidentResponseEnv]:
+    """Return (session_id, env). Creates a new session if id is None or unknown."""
+    if session_id and session_id in _SESSION_REGISTRY:
+        return session_id, _SESSION_REGISTRY[session_id]
+    # New session
+    if len(_SESSION_REGISTRY) >= _MAX_SESSIONS:
+        # Evict the oldest session (simple FIFO)
+        oldest = next(iter(_SESSION_REGISTRY))
+        del _SESSION_REGISTRY[oldest]
+    new_id = session_id or secrets.token_hex(16)
+    _SESSION_REGISTRY[new_id] = IncidentResponseEnv()
+    return new_id, _SESSION_REGISTRY[new_id]
 
 
 @asynccontextmanager
@@ -63,6 +83,8 @@ app.add_middleware(
 
 class ResetRequest(BaseModel):
     task_id: str
+    session_id: str | None = None
+    variant_seed: int | None = None
 
 
 class BaselineResponse(BaseModel):
@@ -82,22 +104,42 @@ async def health():
         "environment": "incident-response-triage",
         "version": "1.0.0",
         "tasks": [t.task_id for t in get_all_tasks()],
+        "active_sessions": len(_SESSION_REGISTRY),
     }
 
 
 @app.post("/reset")
 async def reset(request: ResetRequest):
-    """Reset the environment for a given task_id."""
+    """Reset the environment for a given task_id.
+
+    Returns the initial observation plus a `session_id` that must be
+    passed via the `X-Session-ID` header on all subsequent calls.
+    """
     try:
-        obs = env.reset(request.task_id)
-        return obs.model_dump()
+        session_id, env = _get_or_create_session(request.session_id)
+        # When no variant_seed is supplied randomise for anti-memorization;
+        # explicit 0 keeps the primary (deterministic) scenario.
+        seed = request.variant_seed if request.variant_seed is not None else secrets.randbelow(100)
+        obs = env.reset(request.task_id, variant_seed=seed)
+        data = obs.model_dump()
+        data["session_id"] = session_id
+        return data
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/step")
-async def step(action: Action):
+async def step(
+    action: Action,
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
     """Execute one action and return observation, reward, done, info."""
+    if not x_session_id or x_session_id not in _SESSION_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID header. Call /reset first.",
+        )
+    env = _SESSION_REGISTRY[x_session_id]
     try:
         result: StepResult = env.step(action)
         return result.model_dump()
@@ -108,8 +150,16 @@ async def step(action: Action):
 
 
 @app.get("/state")
-async def state():
+async def state(
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
     """Return full environment state."""
+    if not x_session_id or x_session_id not in _SESSION_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID header. Call /reset first.",
+        )
+    env = _SESSION_REGISTRY[x_session_id]
     try:
         return env.state().model_dump()
     except RuntimeError as exc:
@@ -123,8 +173,16 @@ async def tasks():
 
 
 @app.post("/grader")
-async def grader():
+async def grader(
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
     """Return grader score for the current or most recent episode."""
+    if not x_session_id or x_session_id not in _SESSION_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID header. Call /reset first.",
+        )
+    env = _SESSION_REGISTRY[x_session_id]
     try:
         result = env.grade()
         return result.model_dump()
@@ -134,14 +192,15 @@ async def grader():
 
 @app.post("/baseline")
 async def baseline():
-    """Run the baseline inference script against all tasks.
+    """Run the rule-based baseline inference against all tasks (in-process).
 
-    Requires OPENAI_API_KEY environment variable to be set.
-    Falls back to a rule-based baseline if no API key is available.
+    Creates a dedicated ephemeral env instance so it never interferes
+    with any active session.
     """
     try:
         from baseline.inference import run_all_tasks
-        results = run_all_tasks(base_url=None, env_instance=env)
+        dedicated_env = IncidentResponseEnv()
+        results = run_all_tasks(base_url=None, env_instance=dedicated_env)
         summary = {
             "mean_score": round(
                 sum(r["score"] for r in results) / len(results), 4

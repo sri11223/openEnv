@@ -1,3 +1,17 @@
+---
+title: Incident Response Triage
+emoji: 🚨
+colorFrom: red
+colorTo: orange
+sdk: docker
+pinned: false
+tags:
+  - openenv
+  - reinforcement-learning
+  - sre
+  - incident-response
+---
+
 # Incident Response Triage — OpenEnv Environment
 
 > **Domain:** Site Reliability Engineering / On-Call Incident Management  

@@ -1,12 +1,14 @@
 """Core environment implementing the OpenEnv step() / reset() / state() API.
 
 This module owns all mutable episode state.  It is deliberately a single-
-episode, single-threaded environment — the FastAPI layer handles concurrency.
+episode, per-session environment — the FastAPI layer maintains one instance
+per session ID, ensuring concurrent agents never share state.
 """
 
 from __future__ import annotations
 
 import copy
+import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -62,9 +64,14 @@ class IncidentResponseEnv:
     # reset()
     # ------------------------------------------------------------------
 
-    def reset(self, task_id: str) -> Observation:
-        """Reset the environment for a new episode on the given task."""
-        scenario = get_scenario(task_id)
+    def reset(self, task_id: str, variant_seed: int = 0) -> Observation:
+        """Reset the environment for a new episode on the given task.
+
+        Args:
+            task_id:      Task to run.
+            variant_seed: Scenario variant index (default 0 = primary scenario).
+        """
+        scenario = get_scenario(task_id, variant_seed=variant_seed)
         self._scenario = scenario
         self._task_id = task_id
         self._step = 0
