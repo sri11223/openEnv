@@ -7,7 +7,11 @@ Validates:
   - Rule-based baseline reproduces expected scores
   - Episode boundaries work correctly
   - Invalid actions are handled gracefully
+  - Concurrent episodes in separate instances do not interfere
 """
+
+import threading
+from typing import Any, Dict
 
 import pytest
 
@@ -275,3 +279,96 @@ class TestEpisodeBoundaries:
                 done = True
                 break
         assert done  # Should have hit max steps
+
+
+# --------------------------------------------------------------------------
+# Concurrent isolation tests
+# --------------------------------------------------------------------------
+
+class TestConcurrency:
+    def test_parallel_episodes_do_not_share_state(self):
+        """Two threads run full independent episodes simultaneously.
+        Each gets its own IncidentResponseEnv — they must never see each
+        other's actions in their state snapshots.
+        """
+        results: Dict[str, Any] = {}
+        errors: list = []
+
+        def run_easy(label: str) -> None:
+            try:
+                e = IncidentResponseEnv()
+                e.reset("severity_classification")
+                e.step(Action(action_type=ActionType.INVESTIGATE, target="postgres-primary"))
+                e.step(Action(action_type=ActionType.CLASSIFY, parameters={"severity": "P2"}))
+                results[label] = {"grade": e.grade(), "state": e.state()}
+            except Exception as exc:  # pragma: no cover
+                errors.append(f"{label}: {exc}")
+
+        def run_medium(label: str) -> None:
+            try:
+                e = IncidentResponseEnv()
+                e.reset("root_cause_analysis")
+                e.step(Action(action_type=ActionType.INVESTIGATE, target="redis-session"))
+                results[label] = {"state": e.state()}
+            except Exception as exc:  # pragma: no cover
+                errors.append(f"{label}: {exc}")
+
+        t1 = threading.Thread(target=run_easy, args=("thread_easy",))
+        t2 = threading.Thread(target=run_medium, args=("thread_medium",))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Thread errors: {errors}"
+        assert results["thread_easy"]["state"].task_id == "severity_classification"
+        assert results["thread_medium"]["state"].task_id == "root_cause_analysis"
+        # Easy thread finished — medium thread must not have affected its score
+        assert results["thread_easy"]["grade"].score > 0.0
+        # The medium env must only know about redis-session, not postgres-primary
+        assert "redis-session" in results["thread_medium"]["state"].investigated_services
+        assert "postgres-primary" not in results["thread_medium"]["state"].investigated_services
+
+    def test_many_sequential_resets_same_instance(self):
+        """Resetting the same env multiple times must always produce clean state."""
+        e = IncidentResponseEnv()
+        for task_id in SCENARIOS:
+            obs = e.reset(task_id)
+            assert obs.investigated_services == []
+            assert obs.step_number == 0
+            # Do an action, then reset to a different task
+            e.step(Action(action_type=ActionType.INVESTIGATE, target=obs.available_services[0]))
+        # Final state after last reset is still clean
+        obs = e.reset("severity_classification")
+        assert obs.investigated_services == []
+
+
+# --------------------------------------------------------------------------
+# Scenario variant tests
+# --------------------------------------------------------------------------
+
+class TestScenarioVariants:
+    def test_variant_seed_0_is_deterministic(self):
+        """Primary scenario (seed=0) always returns the same incident_id."""
+        e = IncidentResponseEnv()
+        obs1 = e.reset("severity_classification", variant_seed=0)
+        obs2 = e.reset("severity_classification", variant_seed=0)
+        assert obs1.incident_id == obs2.incident_id
+
+    def test_different_seeds_may_return_different_scenarios(self):
+        """Seed 0 and seed 1 should yield different scenarios for easy task."""
+        from src.scenarios import SCENARIO_VARIANTS
+        if len(SCENARIO_VARIANTS.get("severity_classification", [])) > 1:
+            e = IncidentResponseEnv()
+            obs0 = e.reset("severity_classification", variant_seed=0)
+            obs1 = e.reset("severity_classification", variant_seed=1)
+            # Different variants have different incident IDs
+            assert obs0.incident_id != obs1.incident_id
+
+    def test_variant_seed_wraps_gracefully(self):
+        """Any integer seed must not raise an exception."""
+        e = IncidentResponseEnv()
+        for seed in [0, 1, 99, 100, 999]:
+            obs = e.reset("severity_classification", variant_seed=seed)
+            assert obs.step_number == 0
+

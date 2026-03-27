@@ -112,11 +112,52 @@ reward:
   type: dense
   range: [-1.0, 1.0]
   description: >
-    Dense per-step reward with multiple components:
-    investigation relevance, classification accuracy,
-    diagnosis correctness, remediation validity,
-    escalation appropriateness, communication quality,
-    and temporal degradation penalty.
+    Dense per-step reward signal across the full trajectory.
+    Rewards partial progress so agents learn incrementally —
+    not just from binary episode outcomes.
+  components:
+    - name: relevant_investigation
+      value: +0.06
+      description: "Investigating a service directly related to the active incident."
+    - name: irrelevant_investigation
+      value: -0.02
+      description: "Investigating a valid but unrelated service."
+    - name: invalid_target
+      value: -0.05
+      description: "Target not in available_services."
+    - name: duplicate_investigation
+      value: -0.03
+      description: "Re-investigating a service already visited."
+    - name: correct_classification
+      value: +0.15
+      description: "Classifying incident severity exactly right."
+    - name: wrong_classification
+      value: -0.05 to -0.25
+      description: "Graded penalty proportional to severity distance."
+    - name: correct_diagnosis_service
+      value: +0.10
+      description: "Diagnosing the correct root-cause service."
+    - name: correct_diagnosis_keywords
+      value: +0.05
+      description: "Diagnosis text matches root-cause keywords."
+    - name: correct_remediation
+      value: +0.12
+      description: "Applying a valid remediation action."
+    - name: wrong_remediation
+      value: -0.08
+      description: "Applying a destructive or irrelevant remediation."
+    - name: correct_escalation
+      value: +0.08
+      description: "Escalating to the expected team."
+    - name: communication
+      value: +0.03
+      description: "Posting a status communication to any channel."
+    - name: temporal_degradation
+      value: -0.005 to -0.015 per step
+      description: "Per-step urgency penalty that scales with incident severity."
+    - name: reasoning_bonus
+      value: +0.01
+      description: "Non-empty action reasoning field."
 
 endpoints:
   reset: "POST /reset"
@@ -125,4 +166,7 @@ endpoints:
   tasks: "GET /tasks"
   grader: "POST /grader"
   baseline: "POST /baseline"
+  metrics: "GET /metrics"
+  render: "GET /render"
+  leaderboard: "GET /leaderboard"
   health: "GET /"
