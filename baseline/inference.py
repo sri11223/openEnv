@@ -304,17 +304,28 @@ def run_episode_llm(
     except ImportError:
         raise RuntimeError("openai package required for LLM baseline. pip install openai")
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    # Support competition env vars (API_BASE_URL, HF_TOKEN, MODEL_NAME)
+    # as well as the standard OPENAI_API_KEY
+    api_key = os.environ.get("HF_TOKEN") or os.environ.get("API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY environment variable not set.")
+        raise RuntimeError("Set HF_TOKEN (or OPENAI_API_KEY) environment variable.")
 
-    llm = OpenAI(api_key=api_key)
+    api_base = os.environ.get("API_BASE_URL")
+    effective_model = os.environ.get("MODEL_NAME", model)
+
+    llm_kwargs: Dict[str, Any] = {"api_key": api_key}
+    if api_base:
+        llm_kwargs["base_url"] = api_base
+
+    llm = OpenAI(**llm_kwargs)
     client = httpx.Client(base_url=base_url, timeout=30.0)
 
     # Reset environment
     resp = client.post("/reset", json={"task_id": task_id})
     resp.raise_for_status()
     obs = resp.json()
+    session_id = obs["session_id"]
+    headers = {"X-Session-ID": session_id}
 
     total_reward = 0.0
     steps = 0
@@ -332,7 +343,7 @@ def run_episode_llm(
 
         # Query LLM
         completion = llm.chat.completions.create(
-            model=model,
+            model=effective_model,
             messages=messages,
             temperature=0.0,
             max_tokens=500,
@@ -352,7 +363,7 @@ def run_episode_llm(
                 "reasoning": "JSON parse error fallback",
             }
 
-        resp = client.post("/step", json=action_dict)
+        resp = client.post("/step", json=action_dict, headers=headers)
         resp.raise_for_status()
         result = resp.json()
 
@@ -362,7 +373,7 @@ def run_episode_llm(
         done = result["done"]
 
     # Final grader
-    resp = client.post("/grader")
+    resp = client.post("/grader", headers=headers)
     resp.raise_for_status()
     grader = resp.json()
 

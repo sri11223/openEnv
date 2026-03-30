@@ -156,15 +156,21 @@ pytest tests/ -v
 # Run validation
 python validate.py
 
-# Run baseline (in-process, no server needed)
+# Run inference script (root-level, competition-compliant)
+python inference.py
+# → Uses rules baseline by default; set HF_TOKEN + API_BASE_URL + MODEL_NAME for LLM mode
+
+# Run baseline module (alternative)
 python -m baseline.inference --mode rules --direct
 
 # Run baseline (against running server)
 python -m baseline.inference --mode rules --base-url http://localhost:7860
 
-# Run LLM baseline (requires OPENAI_API_KEY)
-export OPENAI_API_KEY=sk-...
-python -m baseline.inference --mode llm --base-url http://localhost:7860
+# Run LLM baseline
+export HF_TOKEN=hf_...            # or OPENAI_API_KEY=sk-...
+export API_BASE_URL=https://router.huggingface.co/v1
+export MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+python inference.py
 ```
 
 ### Docker
@@ -245,25 +251,26 @@ These scores represent a near-optimal deterministic policy. An LLM agent typical
 
 ```
 openEnv/
-├── app.py                    # FastAPI server with all endpoints
-├── openenv.yaml              # OpenEnv metadata spec
-├── Dockerfile                # Container definition
-├── requirements.txt          # Python dependencies
-├── validate.py               # Pre-submission validation
+├── inference.py                  # Root inference script (competition-compliant)
+├── app.py                        # FastAPI server with all endpoints
+├── openenv.yaml                  # OpenEnv metadata spec
+├── Dockerfile                    # Container definition
+├── requirements.txt              # Python dependencies
+├── validate.py                   # Pre-submission validation
 ├── src/
 │   ├── __init__.py
-│   ├── models.py             # Pydantic models (Observation, Action, Reward, etc.)
-│   ├── scenarios.py          # Deterministic incident scenario data
-│   ├── environment.py        # Core env: reset(), step(), state(), grade()
-│   ├── rewards.py            # Dense per-step reward computation
-│   ├── graders.py            # End-of-episode grading (0.0–1.0)
-│   └── tasks.py              # Task metadata for /tasks endpoint
+│   ├── models.py                 # Pydantic models (Observation, Action, Reward, etc.)
+│   ├── scenarios.py              # Deterministic incident scenario data
+│   ├── environment.py            # Core env: reset(), step(), state(), grade()
+│   ├── rewards.py                # Dense per-step reward computation
+│   ├── graders.py                # End-of-episode grading (0.0–1.0)
+│   └── tasks.py                  # Task metadata for /tasks endpoint
 ├── baseline/
 │   ├── __init__.py
-│   └── inference.py          # Rule-based + LLM baseline scripts
+│   └── inference.py              # Rule-based + LLM baseline scripts (module)
 └── tests/
     ├── __init__.py
-    └── test_env.py           # Comprehensive test suite
+    └── test_env.py               # Comprehensive test suite
 ```
 
 ---
