@@ -193,3 +193,9 @@ endpoints:
   - path: /
     method: GET
     description: "Health check — returns 200 OK."
+  - path: /ws
+    method: WS
+    description: "WebSocket persistent session. One isolated env per connection — no X-Session-ID header. Supports: reset, step, state, grade messages."
+  - path: /web
+    method: GET
+    description: "Interactive browser-based incident dashboard backed by WebSocket."
