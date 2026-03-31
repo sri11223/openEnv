@@ -28,7 +28,7 @@ import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -205,12 +205,14 @@ async def health():
 
 
 @app.post("/reset")
-async def reset(request: ResetRequest):
+async def reset(request: ResetRequest | None = Body(default=None)):
     """Reset the environment for a given task_id.
 
     Returns the initial observation plus a `session_id` that must be
     passed via the `X-Session-ID` header on all subsequent calls.
     """
+    if request is None:
+        request = ResetRequest()
     try:
         session_id, env = _get_or_create_session(request.session_id)
         # When no variant_seed is supplied randomise for anti-memorization;
