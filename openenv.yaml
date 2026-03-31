@@ -160,6 +160,9 @@ reward:
       description: "Non-empty reasoning field; higher bonus when relevant services or keywords are mentioned."
 
 endpoints:
+  - path: /health
+    method: GET
+    description: "Standard OpenEnv health check. Returns {status: healthy}."
   - path: /reset
     method: POST
     description: "Start a new episode for the specified task_id."

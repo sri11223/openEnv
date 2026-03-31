@@ -175,6 +175,12 @@ class BaselineResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@app.get("/health")
+async def health_check():
+    """Standard OpenEnv health check – returns {status: healthy}."""
+    return {"status": "healthy"}
+
+
 @app.get("/")
 async def health():
     """Health check – returns 200 with environment info and live telemetry."""
