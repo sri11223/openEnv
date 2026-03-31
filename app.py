@@ -161,7 +161,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class ResetRequest(BaseModel):
-    task_id: str
+    task_id: str = "severity_classification"
     session_id: str | None = None
     variant_seed: int | None = None
 
