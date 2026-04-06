@@ -11,6 +11,7 @@ MANDATORY
 - The inference script must be named `inference.py` and placed in the root
   directory of the project.
 - Participants must use OpenAI Client for all LLM calls using above variables.
+- Structured stdout logs follow the [START], [STEP], and [END] format.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import httpx
@@ -27,7 +30,7 @@ from openai import OpenAI
 # Required competition env vars
 # ---------------------------------------------------------------------------
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 
 # Environment endpoint (this OpenEnv server, not the LLM endpoint)
@@ -41,7 +44,74 @@ TASK_IDS = [
 
 MAX_STEPS_OVERRIDE = 20       # safety cap
 TEMPERATURE = 0.0
-MAX_TOKENS = 500
+MAX_TOKENS = 400
+GLOBAL_TIMEOUT_SECONDS = 1080  # 18 min hard cap (spec requires <20 min)
+
+# ---------------------------------------------------------------------------
+# Structured logging helpers — [START], [STEP], [END] format
+# ---------------------------------------------------------------------------
+
+def _log_start(task_id: str, mode: str, model: str | None = None) -> None:
+    """Emit a [START] log to stdout."""
+    entry = {
+        "event": "START",
+        "task_id": task_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+    }
+    if model:
+        entry["model"] = model
+    print(json.dumps(entry), flush=True)
+
+
+def _log_step(
+    task_id: str,
+    step: int,
+    action: Dict[str, Any],
+    reward: float,
+    cumulative_reward: float,
+    done: bool,
+) -> None:
+    """Emit a [STEP] log to stdout."""
+    entry = {
+        "event": "STEP",
+        "task_id": task_id,
+        "step": step,
+        "action": action,
+        "reward": round(reward, 4),
+        "cumulative_reward": round(cumulative_reward, 4),
+        "done": done,
+    }
+    print(json.dumps(entry), flush=True)
+
+
+def _log_end(
+    task_id: str,
+    score: float,
+    total_steps: int,
+    total_reward: float,
+    breakdown: Dict[str, float] | None = None,
+    feedback: str = "",
+) -> None:
+    """Emit an [END] log to stdout."""
+    entry = {
+        "event": "END",
+        "task_id": task_id,
+        "score": round(score, 4),
+        "total_steps": total_steps,
+        "total_reward": round(total_reward, 4),
+    }
+    if breakdown:
+        entry["breakdown"] = {k: round(v, 4) for k, v in breakdown.items()}
+    if feedback:
+        entry["feedback"] = feedback
+    print(json.dumps(entry), flush=True)
+
+
+def _info(msg: str) -> None:
+    """Print human-readable info to stderr (NOT stdout — stdout is for structured logs only)."""
+    print(msg, file=sys.stderr, flush=True)
+
 
 # ---------------------------------------------------------------------------
 # System prompt for the LLM agent
@@ -107,6 +177,13 @@ def _rule_based_medium() -> List[Dict[str, Any]]:
 
 
 def _rule_based_hard() -> List[Dict[str, Any]]:
+    # Optimal action order: investigate (4x) -> classify -> diagnose ->
+    # remediate (2x) -> escalate (2x) -> communicate (1x triggers done).
+    # This maximises the score:
+    #   2 remediations  = 0.18   (vs 0.12 for 1)
+    #   2 escalations   = 0.15   (vs 0.09 for 1)
+    #   1 communication = 0.06   (2nd comm never runs because done triggers)
+    # Total: 0.39.  Any other ordering yields <= 0.37.
     return [
         {"action_type": "investigate", "target": "auth-service", "parameters": {},
          "reasoning": "Auth-service has critical latency. Multiple services depend on auth."},
@@ -114,26 +191,28 @@ def _rule_based_hard() -> List[Dict[str, Any]]:
          "reasoning": "API gateway returning 503s. Checking if auth-related."},
         {"action_type": "investigate", "target": "redis-auth-cache", "parameters": {},
          "reasoning": "Checking auth cache — may explain why auth is slow."},
+        {"action_type": "investigate", "target": "order-service", "parameters": {},
+         "reasoning": "Order queue depth at 15000+. Checking downstream impact and queue status."},
         {"action_type": "classify", "target": "", "parameters": {"severity": "P1"},
          "reasoning": "Cascading multi-service outage. P1."},
         {"action_type": "diagnose", "target": "auth-service",
          "parameters": {"root_cause": "Bad deployment v3.1.0 introduced memory leak via unbounded in-memory token cache. Auth-service OOMKill causes cascading failures."},
          "reasoning": "Auth-service logs show v3.1.0 deployment, memory climbing to 97%."},
         {"action_type": "remediate", "target": "auth-service", "parameters": {"action": "rollback"},
-         "reasoning": "Rolling back auth-service to v3.0.9."},
+         "reasoning": "Rolling back auth-service to v3.0.9 to fix the memory leak."},
         {"action_type": "remediate", "target": "order-service", "parameters": {"action": "scale"},
-         "reasoning": "Queue depth at 15000+. Scaling to drain backlog."},
+         "reasoning": "Queue depth at 15000+. Scaling to drain backlog while auth recovers."},
         {"action_type": "escalate", "target": "platform-team",
          "parameters": {"priority": "urgent", "message": "Cascading outage caused by auth-service v3.1.0 memory leak. Rolling back. Need platform support for queue recovery."},
-         "reasoning": "Platform team needs to be aware."},
+         "reasoning": "Platform team needs to be aware of infrastructure impact."},
         {"action_type": "escalate", "target": "auth-team",
          "parameters": {"priority": "urgent", "message": "auth-service v3.1.0 has unbounded memory growth in token cache. Rolled back to v3.0.9. Please investigate before re-deploying."},
-         "reasoning": "Auth team owns the service."},
+         "reasoning": "Auth team owns the service and needs to fix the root cause code."},
         {"action_type": "communicate", "target": "status_page",
-         "parameters": {"message": "INCIDENT: Multiple services affected due to auth-service degradation. Root cause identified. Rollback in progress. ETA 15 min."},
-         "reasoning": "External stakeholders need status."},
+         "parameters": {"message": "INCIDENT UPDATE: Root cause identified — auth-service v3.1.0 memory leak. Rollback in progress. Platform and auth teams engaged. ETA for full recovery: 15 minutes."},
+         "reasoning": "External stakeholders need comprehensive status update with root cause and ETA."},
         {"action_type": "communicate", "target": "slack",
-         "parameters": {"message": "Incident update: auth-service v3.1.0 rolled back. Memory leak root cause. Order queue draining. Monitoring recovery."},
+         "parameters": {"message": "Incident update: auth-service v3.1.0 rolled back. Memory leak in token cache was root cause. Order queue draining. Monitoring recovery."},
          "reasoning": "Internal team status update."},
     ]
 
@@ -152,7 +231,9 @@ RULE_BASED_ACTIONS = {
 def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
     """Run one episode using the deterministic rule-based baseline."""
     actions = RULE_BASED_ACTIONS[task_id]()
-    client = httpx.Client(base_url=env_url, timeout=30.0)
+    client = httpx.Client(base_url=env_url, timeout=20.0)
+
+    _log_start(task_id, mode="rules")
 
     resp = client.post("/reset", json={"task_id": task_id, "variant_seed": 0})
     resp.raise_for_status()
@@ -169,13 +250,32 @@ def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
         resp = client.post("/step", json=act_dict, headers=headers)
         resp.raise_for_status()
         result = resp.json()
-        total_reward += result["reward"]["value"]
+        reward_val = result["reward"]["value"]
+        total_reward += reward_val
         steps += 1
         done = result["done"]
+
+        _log_step(
+            task_id=task_id,
+            step=steps,
+            action=act_dict,
+            reward=reward_val,
+            cumulative_reward=total_reward,
+            done=done,
+        )
 
     resp = client.post("/grader", headers=headers)
     resp.raise_for_status()
     grader = resp.json()
+
+    _log_end(
+        task_id=task_id,
+        score=grader["score"],
+        total_steps=steps,
+        total_reward=total_reward,
+        breakdown=grader.get("breakdown"),
+        feedback=grader.get("feedback", ""),
+    )
 
     return {
         "task_id": task_id,
@@ -189,17 +289,19 @@ def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
 
 def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
     """Run one episode with an LLM agent using the OpenAI Client."""
-    if not API_KEY:
+    if not HF_TOKEN:
         raise RuntimeError(
             "HF_TOKEN (or API_KEY) environment variable not set. "
             "Required for LLM inference."
         )
 
     llm = OpenAI(
-        api_key=API_KEY,
+        api_key=HF_TOKEN,
         base_url=API_BASE_URL,
     )
-    client = httpx.Client(base_url=env_url, timeout=30.0)
+    client = httpx.Client(base_url=env_url, timeout=20.0)
+
+    _log_start(task_id, mode="llm", model=MODEL_NAME)
 
     # Reset environment
     resp = client.post("/reset", json={"task_id": task_id})
@@ -254,14 +356,33 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
         result = resp.json()
 
         obs = result["observation"]
-        total_reward += result["reward"]["value"]
+        reward_val = result["reward"]["value"]
+        total_reward += reward_val
         steps += 1
         done = result["done"]
+
+        _log_step(
+            task_id=task_id,
+            step=steps,
+            action=action_dict,
+            reward=reward_val,
+            cumulative_reward=total_reward,
+            done=done,
+        )
 
     # Final grader
     resp = client.post("/grader", headers=headers)
     resp.raise_for_status()
     grader = resp.json()
+
+    _log_end(
+        task_id=task_id,
+        score=grader["score"],
+        total_steps=steps,
+        total_reward=total_reward,
+        breakdown=grader.get("breakdown"),
+        feedback=grader.get("feedback", ""),
+    )
 
     return {
         "task_id": task_id,
@@ -279,41 +400,56 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
 
 def main():
     # Determine mode: if HF_TOKEN / API_KEY is set → try LLM, else rule-based
-    use_llm = bool(API_KEY)
+    use_llm = bool(HF_TOKEN)
     mode = "llm" if use_llm else "rules"
 
-    print("=" * 60)
-    print("Incident Response Triage — Inference Script")
-    print(f"Mode       : {mode}")
-    print(f"ENV_BASE   : {ENV_BASE_URL}")
+    _info("=" * 60)
+    _info("Incident Response Triage — Inference Script")
+    _info(f"Mode       : {mode}")
+    _info(f"ENV_BASE   : {ENV_BASE_URL}")
     if use_llm:
-        print(f"API_BASE   : {API_BASE_URL}")
-        print(f"MODEL      : {MODEL_NAME}")
-    print("=" * 60)
+        _info(f"API_BASE   : {API_BASE_URL}")
+        _info(f"MODEL      : {MODEL_NAME}")
+    _info("=" * 60)
 
+    start_time = time.time()
     results: List[Dict[str, Any]] = []
-    for task_id in TASK_IDS:
-        if use_llm:
-            result = run_episode_llm(task_id, ENV_BASE_URL)
-        else:
-            result = run_episode_rules(task_id, ENV_BASE_URL)
-        results.append(result)
-        print(f"  Task: {task_id:30s}  Score: {result['score']:.4f}  Steps: {result['steps_taken']}")
 
-    print("=" * 60)
-    mean_score = sum(r["score"] for r in results) / len(results)
-    print(f"Mean score: {mean_score:.4f}")
-    print("=" * 60)
+    for task_id in TASK_IDS:
+        # Check global timeout
+        elapsed = time.time() - start_time
+        if elapsed > GLOBAL_TIMEOUT_SECONDS:
+            _info(f"Global timeout reached ({elapsed:.0f}s). Skipping remaining tasks.")
+            break
+
+        try:
+            if use_llm:
+                result = run_episode_llm(task_id, ENV_BASE_URL)
+            else:
+                result = run_episode_rules(task_id, ENV_BASE_URL)
+            results.append(result)
+            _info(f"  Task: {task_id:30s}  Score: {result['score']:.4f}  Steps: {result['steps_taken']}")
+        except Exception as exc:
+            _info(f"  Task: {task_id:30s}  ERROR: {exc}")
+            # Emit structured error logs even on failure
+            _log_end(task_id=task_id, score=0.0, total_steps=0, total_reward=0.0,
+                     feedback=f"Error: {exc}")
+
+    _info("=" * 60)
+    if results:
+        mean_score = sum(r["score"] for r in results) / len(results)
+        _info(f"Mean score: {mean_score:.4f}")
+    _info("=" * 60)
 
     for r in results:
-        print(f"\n--- {r['task_id']} ---")
-        print(f"  Score: {r['score']:.4f}")
-        print(f"  Steps: {r['steps_taken']}")
-        print(f"  Cumulative reward: {r['cumulative_reward']:.4f}")
-        print(f"  Feedback: {r.get('grader_feedback', 'N/A')}")
+        _info(f"\n--- {r['task_id']} ---")
+        _info(f"  Score: {r['score']:.4f}")
+        _info(f"  Steps: {r['steps_taken']}")
+        _info(f"  Cumulative reward: {r['cumulative_reward']:.4f}")
+        _info(f"  Feedback: {r.get('grader_feedback', 'N/A')}")
         if r.get("grader_breakdown"):
             for k, v in r["grader_breakdown"].items():
-                print(f"    {k}: {v:.4f}")
+                _info(f"    {k}: {v:.4f}")
 
 
 if __name__ == "__main__":

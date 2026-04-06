@@ -235,7 +235,7 @@ def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) 
     else:
         breakdown["communication"] = 0.0
 
-    # 6. Investigation thoroughness (0.15)
+    # 6. Investigation thoroughness (0.12)
     relevant_investigated = len(
         set(state.investigated_services) & set(scenario.relevant_services)
     )
@@ -244,9 +244,20 @@ def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) 
         inv_ratio = relevant_investigated / total_relevant
     else:
         inv_ratio = 0.0
-    breakdown["investigation_thoroughness"] = round(0.15 * inv_ratio, 4)
+    breakdown["investigation_thoroughness"] = round(0.12 * inv_ratio, 4)
 
-    # 7. Efficiency (0.10); 0 steps = no credit
+    # 7. Investigation precision (0.03) — penalise unfocused investigation
+    irrelevant_investigated = len(
+        set(state.investigated_services) - set(scenario.relevant_services)
+    )
+    if irrelevant_investigated == 0:
+        breakdown["investigation_precision"] = 0.03
+    elif irrelevant_investigated <= 1:
+        breakdown["investigation_precision"] = 0.01
+    else:
+        breakdown["investigation_precision"] = 0.0
+
+    # 8. Efficiency (0.10); 0 steps = no credit
     max_s = scenario.max_steps
     used = state.total_steps_taken
     if used == 0:

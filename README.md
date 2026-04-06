@@ -240,8 +240,8 @@ curl -X POST http://localhost:7860/grader -H "X-Session-ID: $SESSION"
 |------|-------|-------|
 | severity_classification | **1.00** | 3 |
 | root_cause_analysis | **1.00** | 5 |
-| full_incident_management | **0.91** | 10 |
-| **Mean** | **0.97** | — |
+| full_incident_management | **0.95** | 12 |
+| **Mean** | **0.98** | — |
 
 These scores represent a near-optimal deterministic policy. An LLM agent typically scores lower due to reasoning errors and sub-optimal action ordering.
 
@@ -251,26 +251,26 @@ These scores represent a near-optimal deterministic policy. An LLM agent typical
 
 ```
 openEnv/
-├── inference.py                  # Root inference script (competition-compliant)
-├── app.py                        # FastAPI server with all endpoints
+├── inference.py                  # Root inference script (competition-compliant, [START]/[STEP]/[END] logs)
+├── app.py                        # FastAPI server with all endpoints + WebSocket + web UI
 ├── openenv.yaml                  # OpenEnv metadata spec
-├── Dockerfile                    # Container definition
+├── Dockerfile                    # Multi-stage container definition (non-root, health check)
 ├── requirements.txt              # Python dependencies
 ├── validate.py                   # Pre-submission validation
 ├── src/
 │   ├── __init__.py
-│   ├── models.py                 # Pydantic models (Observation, Action, Reward, etc.)
-│   ├── scenarios.py              # Deterministic incident scenario data
+│   ├── models.py                 # Pydantic v2 models (Observation, Action, Reward, StepResult, etc.)
+│   ├── scenarios.py              # Deterministic incident scenario data (7 scenario variants)
 │   ├── environment.py            # Core env: reset(), step(), state(), grade()
-│   ├── rewards.py                # Dense per-step reward computation
-│   ├── graders.py                # End-of-episode grading (0.0–1.0)
+│   ├── rewards.py                # Dense per-step reward computation (12 reward components)
+│   ├── graders.py                # End-of-episode grading (0.0–1.0, multi-dimensional breakdown)
 │   └── tasks.py                  # Task metadata for /tasks endpoint
 ├── baseline/
 │   ├── __init__.py
 │   └── inference.py              # Rule-based + LLM baseline scripts (module)
 └── tests/
     ├── __init__.py
-    └── test_env.py               # Comprehensive test suite
+    └── test_env.py               # Comprehensive test suite (concurrency, variants, boundaries)
 ```
 
 ---
@@ -279,16 +279,42 @@ openEnv/
 
 1. **Progressive Disclosure**: Logs and metrics are hidden until investigated. This prevents the agent from seeing the answer immediately and forces genuine investigation strategy.
 
-2. **Temporal Degradation**: Real incidents get worse over time. The environment penalizes slow response with per-step degradation that scales with task difficulty.
+2. **Temporal Degradation**: Real incidents get worse over time. The environment penalizes slow response with per-step degradation that scales with task difficulty (0.005/step easy → 0.015/step hard).
 
-3. **Multi-dimensional Grading**: Each task grades multiple aspects (accuracy, process quality, efficiency) rather than just binary success/fail.
+3. **Dynamic Blast Radius**: Metrics degrade in real-time as the agent delays. Connection pools fill, error rates climb, queue depths grow — revealed via INVESTIGATE so the agent sees a progressively worsening system.
 
-4. **Red Herrings**: The hard scenario includes 8 services but only 4 are relevant. CDN and postgres show normal behavior, testing the agent's ability to focus.
+4. **Multi-dimensional Grading**: Each task grades multiple orthogonal aspects (accuracy, investigation quality, efficiency, precision) rather than just binary success/fail. The hard task has 8 scoring dimensions.
 
-5. **Deterministic Scenarios**: Scenarios are fixed data, not randomly generated. This ensures reproducibility and fair comparison between agents.
+5. **Investigation Precision**: Agents that investigate irrelevant services (red herrings like CDN, postgres-primary in the hard scenario) receive a lower precision score. This rewards strategic, focused investigation.
+
+6. **Red Herrings**: The hard scenario includes 8 services but only 4 are relevant. CDN and postgres show normal behavior, testing the agent's ability to focus.
+
+7. **Deterministic Scenarios**: Scenarios are fixed data with multiple variants per task (2+2+3 = 7 total). Variant seed 0 always returns the primary scenario for reproducibility.
+
+8. **Content-Aware Reasoning Bonus**: The reward function introspects the agent's `reasoning` field and gives higher bonuses when it references relevant services or root-cause keywords — encouraging agents to show their work.
+
+---
+
+## Pre-Submission Checklist
+
+- [x] HF Space deploys and responds to `GET /` with 200
+- [x] `openenv.yaml` valid with 3 tasks, action/observation spaces, reward spec
+- [x] Typed Pydantic v2 models for Observation, Action, Reward, StepResult
+- [x] `step()` / `reset()` / `state()` endpoints functional
+- [x] 3 tasks with difficulty progression: easy → medium → hard
+- [x] Graders produce deterministic scores in [0.0, 1.0] range
+- [x] Dense per-step rewards (not just binary end-of-episode)
+- [x] Baseline inference script (`inference.py`) with reproducible scores
+- [x] Structured stdout logs: `[START]`, `[STEP]`, `[END]` format
+- [x] `Dockerfile` builds and runs cleanly
+- [x] Environment variables: `API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`
+- [x] OpenAI Client used for all LLM calls
+- [x] Runtime < 20 minutes on vcpu=2, 8GB RAM
+- [x] `python validate.py` passes all checks
 
 ---
 
 ## License
 
 MIT
+

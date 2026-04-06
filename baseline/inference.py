@@ -42,7 +42,7 @@ Each action must be a JSON object with these fields:
   - reasoning: brief explanation of why you chose this action
 
 Action details:
-  INVESTIGATE: target=service_name → reveals that service's logs and metrics
+  INVESTIGATE: target=service_name -> reveals that service's logs and metrics
   CLASSIFY: parameters.severity = "P1"|"P2"|"P3"|"P4"
   DIAGNOSE: target=service_name, parameters.root_cause = "description"
   REMEDIATE: target=service_name, parameters.action = "restart"|"rollback"|"scale"|"config_change"
@@ -57,7 +57,7 @@ Strategy:
 5. Apply targeted remediation
 6. Escalate and communicate as needed
 
-Return ONLY valid JSON — no markdown, no explanation outside the JSON.
+Return ONLY valid JSON -- no markdown, no explanation outside the JSON.
 """
 
 
@@ -126,7 +126,13 @@ def _rule_based_medium() -> List[Dict[str, Any]]:
 
 
 def _rule_based_hard() -> List[Dict[str, Any]]:
-    """Deterministic optimal actions for the hard task."""
+    """Deterministic optimal actions for the hard task.
+
+    Optimal action order: investigate (4x) -> classify -> diagnose ->
+    remediate (2x) -> escalate (2x) -> communicate (triggers done).
+    This maximises the score: 2 remediations (0.18) + 2 escalations (0.15)
+    + 1 communication (0.06) = 0.39.  Any other ordering yields <= 0.37.
+    """
     return [
         {
             "action_type": "investigate",
@@ -145,6 +151,12 @@ def _rule_based_hard() -> List[Dict[str, Any]]:
             "target": "redis-auth-cache",
             "parameters": {},
             "reasoning": "Checking auth cache - may explain why auth is slow.",
+        },
+        {
+            "action_type": "investigate",
+            "target": "order-service",
+            "parameters": {},
+            "reasoning": "Order queue depth at 15000+. Checking downstream impact and queue status.",
         },
         {
             "action_type": "classify",
@@ -185,8 +197,8 @@ def _rule_based_hard() -> List[Dict[str, Any]]:
         {
             "action_type": "communicate",
             "target": "status_page",
-            "parameters": {"message": "INCIDENT: Multiple services affected due to auth-service degradation. Root cause identified (bad deployment). Rollback in progress. ETA for full recovery: 15 minutes."},
-            "reasoning": "External stakeholders need to know the status.",
+            "parameters": {"message": "INCIDENT UPDATE: Root cause identified - auth-service v3.1.0 memory leak. Rollback complete. Platform and auth teams engaged. ETA for full recovery: 15 minutes."},
+            "reasoning": "External stakeholders need comprehensive status update with root cause and ETA.",
         },
         {
             "action_type": "communicate",
@@ -258,7 +270,7 @@ def _run_http(
     """Run episode against the HTTP API."""
     client = httpx.Client(base_url=base_url, timeout=30.0)
 
-    # Reset — capture session_id for all subsequent calls
+    # Reset -- capture session_id for all subsequent calls
     resp = client.post("/reset", json={"task_id": task_id})
     resp.raise_for_status()
     session_id = resp.json()["session_id"]
@@ -410,7 +422,7 @@ def run_all_tasks(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Incident Response Triage – Baseline Inference")
+    parser = argparse.ArgumentParser(description="Incident Response Triage - Baseline Inference")
     parser.add_argument("--mode", choices=["rules", "llm"], default="rules",
                         help="Baseline mode: rule-based or LLM-based")
     parser.add_argument("--base-url", default="http://localhost:7860",
@@ -422,7 +434,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 60)
-    print("Incident Response Triage – Baseline Inference")
+    print("Incident Response Triage - Baseline Inference")
     print(f"Mode: {args.mode}")
     print("=" * 60)
 
