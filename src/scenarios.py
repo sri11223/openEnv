@@ -775,12 +775,157 @@ _SCENARIO_HARD_C = Scenario(
 )
 
 
+# ==========================================================================
+# SCENARIO 1-C – Easy variant: DNS resolution failure
+# ==========================================================================
+
+_SCENARIO_EASY_C = Scenario(
+    scenario_id="dns-fail-001",
+    task_id="severity_classification",
+    incident_id="INC-20260327-201",
+    description=(
+        "Multiple microservices are reporting connection timeouts to downstream "
+        "dependencies. Alerts indicate DNS resolution failures across the "
+        "internal service mesh. Classify the incident severity."
+    ),
+    initial_alerts=[
+        _alert("ALT-301", "api-gateway", AlertSeverity.CRITICAL,
+               "Upstream connection timeout rate 40% to backend services", "2026-03-27T14:00:00Z"),
+        _alert("ALT-302", "coredns", AlertSeverity.CRITICAL,
+               "DNS query failure rate 65% — SERVFAIL responses", "2026-03-27T13:58:00Z"),
+        _alert("ALT-303", "notification-service", AlertSeverity.WARNING,
+               "Failed to resolve smtp-relay.internal: NXDOMAIN", "2026-03-27T14:01:00Z"),
+    ],
+    available_services=["api-gateway", "coredns", "notification-service", "istio-proxy"],
+    service_logs={
+        "api-gateway": [
+            _log("2026-03-27T13:58:00Z", "api-gateway", "ERROR", "upstream connect error: dns_resolution_failure for user-service.default.svc.cluster.local"),
+            _log("2026-03-27T13:59:00Z", "api-gateway", "ERROR", "circuit breaker tripped: 5/10 upstream failures in 30s. Returning 503."),
+            _log("2026-03-27T14:00:00Z", "api-gateway", "WARN", "Retry budget exhausted for payment-service. DNS not resolving."),
+        ],
+        "coredns": [
+            _log("2026-03-27T13:55:00Z", "coredns", "WARN", "Cache miss rate increasing: 80%. Upstream forwarder slow."),
+            _log("2026-03-27T13:57:00Z", "coredns", "ERROR", "OOMKilled: coredns-7d8f9b pod restarted. Memory limit 128Mi exceeded."),
+            _log("2026-03-27T13:58:00Z", "coredns", "ERROR", "SERVFAIL for *.default.svc.cluster.local — upstream timeout after 5s"),
+            _log("2026-03-27T14:00:00Z", "coredns", "ERROR", "Pod restart count: 4 in last 10 minutes. CrashLoopBackOff."),
+        ],
+        "notification-service": [
+            _log("2026-03-27T14:00:00Z", "notification-service", "WARN", "Email delivery failing: cannot resolve smtp-relay.internal"),
+        ],
+        "istio-proxy": [
+            _log("2026-03-27T14:00:00Z", "istio-proxy", "INFO", "Sidecar healthy. mTLS handshake OK. Issue is upstream DNS, not mesh."),
+        ],
+    },
+    service_metrics={
+        "api-gateway": _metrics("api-gateway", 25.0, 40.0, 1200.0, 0.40, 800.0, 5000.0),
+        "coredns": _metrics("coredns", 95.0, 98.0, 5000.0, 0.65, 50.0, 5000.0, restart_count=4.0, cache_miss_pct=80.0),
+        "notification-service": _metrics("notification-service", 10.0, 20.0, 50.0, 0.80, 200.0, 3000.0),
+        "istio-proxy": _metrics("istio-proxy", 5.0, 10.0, 1200.0, 0.01, 2.0, 10.0),
+    },
+    correct_severity=IncidentSeverity.P1,
+    correct_root_cause_service="coredns",
+    correct_root_cause_keywords=["dns", "coredns", "OOM", "memory", "resolution", "SERVFAIL", "CrashLoop"],
+    valid_remediation_actions=[
+        {"action": "restart", "service": "coredns"},
+        {"action": "scale", "service": "coredns"},
+        {"action": "config_change", "service": "coredns", "detail": "increase memory limit"},
+    ],
+    expected_escalation_teams=["platform-team"],
+    max_steps=10,
+    degradation_per_step=0.008,
+    relevant_services=["api-gateway", "coredns"],
+    blast_radius={
+        "coredns": {
+            "error_rate": (0.03, 0.95),
+            "restart_count": (1.0, 15.0),
+        },
+        "api-gateway": {
+            "error_rate": (0.03, 0.80),
+            "latency_p99_ms": (500.0, 15000.0),
+        },
+    },
+)
+
+
+# ==========================================================================
+# SCENARIO 2-C – Medium variant: TLS certificate expiry
+# ==========================================================================
+
+_SCENARIO_MEDIUM_C = Scenario(
+    scenario_id="tls-expiry-001",
+    task_id="root_cause_analysis",
+    incident_id="INC-20260327-301",
+    description=(
+        "The checkout-service is returning 502 errors for all HTTPS calls to "
+        "the payment provider API. Internal health checks pass but external "
+        "payment calls fail. Diagnose the root cause and remediate."
+    ),
+    initial_alerts=[
+        _alert("ALT-401", "checkout-service", AlertSeverity.CRITICAL,
+               "Payment API calls failing: 502 rate 95%", "2026-03-27T09:00:00Z"),
+        _alert("ALT-402", "cert-manager", AlertSeverity.WARNING,
+               "Certificate renewal failed for payments.example.com — ACME challenge timeout", "2026-03-27T08:00:00Z"),
+        _alert("ALT-403", "nginx-ingress", AlertSeverity.WARNING,
+               "TLS handshake failures: 200/min on payments upstream", "2026-03-27T09:01:00Z"),
+    ],
+    available_services=["checkout-service", "cert-manager", "nginx-ingress", "payment-provider-stub"],
+    service_logs={
+        "checkout-service": [
+            _log("2026-03-27T08:55:00Z", "checkout-service", "ERROR", "PaymentGatewayError: SSL certificate has expired (payments.example.com)"),
+            _log("2026-03-27T08:58:00Z", "checkout-service", "ERROR", "javax.net.ssl.SSLHandshakeException: PKIX path validation failed: certificate expired at 2026-03-27T00:00:00Z"),
+            _log("2026-03-27T09:00:00Z", "checkout-service", "ERROR", "Circuit breaker OPEN for payment-provider. 48/50 calls failed in 60s."),
+        ],
+        "cert-manager": [
+            _log("2026-03-27T02:00:00Z", "cert-manager", "INFO", "Certificate renewal triggered for payments.example.com (expires in 24h)"),
+            _log("2026-03-27T02:01:00Z", "cert-manager", "ERROR", "ACME HTTP-01 challenge failed: upstream DNS not resolving challenge token"),
+            _log("2026-03-27T02:05:00Z", "cert-manager", "ERROR", "Retry 3/3 failed. Certificate NOT renewed. Expiry: 2026-03-27T00:00:00Z"),
+            _log("2026-03-27T08:00:00Z", "cert-manager", "CRITICAL", "Certificate EXPIRED: payments.example.com. Last valid: 2026-03-26T23:59:59Z"),
+        ],
+        "nginx-ingress": [
+            _log("2026-03-27T09:00:00Z", "nginx-ingress", "ERROR", "SSL_do_handshake() failed: certificate verify failed (expired)"),
+            _log("2026-03-27T09:01:00Z", "nginx-ingress", "WARN", "Upstream payments backend: 200 TLS errors/min. Peer certificate expired."),
+        ],
+        "payment-provider-stub": [
+            _log("2026-03-27T09:00:00Z", "payment-provider-stub", "INFO", "Healthy. Accepting connections on port 443 with valid certificate."),
+        ],
+    },
+    service_metrics={
+        "checkout-service": _metrics("checkout-service", 15.0, 30.0, 300.0, 0.95, 50.0, 200.0, payment_success_pct=5.0, revenue_loss_per_min=8500.0),
+        "cert-manager": _metrics("cert-manager", 5.0, 10.0, 1.0, 0.0, 10.0, 50.0, certs_expired=1.0, renewal_failures=3.0),
+        "nginx-ingress": _metrics("nginx-ingress", 10.0, 20.0, 500.0, 0.40, 5.0, 30.0, tls_handshake_failures_per_min=200.0),
+        "payment-provider-stub": _metrics("payment-provider-stub", 5.0, 15.0, 50.0, 0.0, 20.0, 80.0),
+    },
+    correct_severity=IncidentSeverity.P1,
+    correct_root_cause_service="cert-manager",
+    correct_root_cause_keywords=["certificate", "TLS", "SSL", "expired", "cert-manager", "renewal", "ACME", "expiry"],
+    valid_remediation_actions=[
+        {"action": "restart", "service": "cert-manager"},
+        {"action": "config_change", "service": "cert-manager", "detail": "force renewal"},
+        {"action": "config_change", "service": "nginx-ingress", "detail": "update certificate"},
+    ],
+    expected_escalation_teams=["security-team", "platform-team"],
+    max_steps=15,
+    degradation_per_step=0.010,
+    relevant_services=["checkout-service", "cert-manager", "nginx-ingress"],
+    blast_radius={
+        "checkout-service": {
+            "error_rate": (0.005, 1.0),
+            "payment_success_pct": (-0.5, 0.0),
+            "revenue_loss_per_min": (500.0, 50000.0),
+        },
+        "nginx-ingress": {
+            "tls_handshake_failures_per_min": (20.0, 1000.0),
+        },
+    },
+)
+
+
 # ---- registry ---------------------------------------------------------------
 
 # Multiple variants per task — environment randomly selects one per reset()
 SCENARIO_VARIANTS: Dict[str, List[Scenario]] = {
-    "severity_classification": [_SCENARIO_EASY, _SCENARIO_EASY_B],
-    "root_cause_analysis": [_SCENARIO_MEDIUM, _SCENARIO_MEDIUM_B],
+    "severity_classification": [_SCENARIO_EASY, _SCENARIO_EASY_B, _SCENARIO_EASY_C],
+    "root_cause_analysis": [_SCENARIO_MEDIUM, _SCENARIO_MEDIUM_B, _SCENARIO_MEDIUM_C],
     "full_incident_management": [_SCENARIO_HARD, _SCENARIO_HARD_B, _SCENARIO_HARD_C],
 }
 
@@ -804,3 +949,4 @@ def get_scenario(task_id: str, variant_seed: int = 0) -> Scenario:
         raise ValueError(f"Unknown task_id '{task_id}'. Valid: {list(SCENARIO_VARIANTS.keys())}")
     variants = SCENARIO_VARIANTS[task_id]
     return variants[variant_seed % len(variants)]
+
