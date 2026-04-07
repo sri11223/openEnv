@@ -75,7 +75,7 @@ def grade_severity_classification(state: EnvironmentState, scenario: Scenario) -
     score = sum(breakdown.values())
     return GraderResult(
         task_id=scenario.task_id,
-        score=round(min(1.0, score), 4),
+        score=round(max(0.01, min(0.99, score)), 4),
         breakdown={k: round(v, 4) for k, v in breakdown.items()},
         feedback=_severity_feedback(breakdown),
     )
@@ -153,7 +153,7 @@ def grade_root_cause_analysis(state: EnvironmentState, scenario: Scenario) -> Gr
     score = sum(breakdown.values())
     return GraderResult(
         task_id=scenario.task_id,
-        score=round(min(1.0, score), 4),
+        score=round(max(0.01, min(0.99, score)), 4),
         breakdown={k: round(v, 4) for k, v in breakdown.items()},
         feedback=_rca_feedback(breakdown),
     )
@@ -274,7 +274,7 @@ def grade_full_incident_management(state: EnvironmentState, scenario: Scenario) 
     score = sum(breakdown.values())
     return GraderResult(
         task_id=scenario.task_id,
-        score=round(min(1.0, score), 4),
+        score=round(max(0.01, min(0.99, score)), 4),
         breakdown={k: round(v, 4) for k, v in breakdown.items()},
         feedback=_full_feedback(breakdown),
     )

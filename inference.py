@@ -82,8 +82,9 @@ def _log_end(
     score: float,
     rewards: List[float],
 ) -> None:
-    """Emit an [END] log to stdout."""
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    """Emit an [END] log to stdout. Score must be strictly in (0, 1)."""
+    score = max(0.01, min(0.99, score))  # validator rejects exactly 0.0 or 1.0
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards) if rewards else "0.00"
     print(
         f"[END] success={str(success).lower()} steps={steps}"
         f" score={score:.2f} rewards={rewards_str}",
