@@ -34,10 +34,13 @@ tags:
 <td><strong>Reward Components</strong></td><td>12 (dense, per-step)</td>
 </tr>
 <tr>
-<td><strong>Unit Tests</strong></td><td>32 / 32 passing</td>
+<td><strong>Unit Tests</strong></td><td>121 / 121 passing</td>
 </tr>
 <tr>
 <td><strong>Validation Checks</strong></td><td>7 / 7 passing</td>
+</tr>
+<tr>
+<td><strong>CI</strong></td><td>GitHub Actions — tests + Docker build + lint</td>
 </tr>
 </table>
 
@@ -431,8 +434,24 @@ tests/test_env.py::TestConcurrency::test_many_sequential_resets_same_instance PA
 tests/test_env.py::TestScenarioVariants::test_variant_seed_0_is_deterministic PASSED
 tests/test_env.py::TestScenarioVariants::test_different_seeds_may_return_different_scenarios PASSED
 tests/test_env.py::TestScenarioVariants::test_variant_seed_wraps_gracefully PASSED
-32 passed in 0.92s
+# ... + 89 extended quality tests in tests/test_quality.py (all 7 scenarios,
+#     every reward component, temporal degradation, blast radius, partial credit,
+#     grader feedback quality, observation contract, YAML structure, inference script)
+121 passed in 77.36s
 ```
+
+---
+
+## Two Inference Files — Why?
+
+There are intentionally **two** inference files that serve different purposes. They are NOT duplicates:
+
+| File | Purpose | Used by |
+|------|---------|---------|
+| **`inference.py`** (root) | Competition-mandatory entry point. Standalone script with `[START]/[STEP]/[END]` structured stdout format, HTTP client calling the running server, env var credentials, exit code 0. | OpenEnv evaluator, `python inference.py` |
+| **`baseline/inference.py`** | Reusable Python module. Supports `rules` and `llm` modes, `--direct` flag (in-process, no server needed), CLI args. Imported by unit tests via `from baseline.inference import run_all_tasks`. | Unit tests, `python -m baseline.inference` |
+
+**The competition spec only runs `inference.py` at the root.** The `baseline/` module exists so tests can validate environment logic without needing a running HTTP server — which makes tests fast, hermetic, and runnable in CI without starting Uvicorn.
 
 ---
 
@@ -440,6 +459,9 @@ tests/test_env.py::TestScenarioVariants::test_variant_seed_wraps_gracefully PASS
 
 ```
 openEnv/
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # CI: tests + Docker E2E + lint on push/PR
 ├── inference.py                  # Root inference script (competition-compliant, [START]/[STEP]/[END] logs)
 ├── app.py                        # FastAPI server with all endpoints + WebSocket + web UI
 ├── openenv.yaml                  # OpenEnv metadata spec

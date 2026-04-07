@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Tests & Validation
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Run OpenEnv validation
+        run: python validate.py
+
+      - name: Run baseline inference (rules mode)
+        run: python inference.py
+        env:
+          ENV_BASE_URL: ""  # inference.py direct mode uses env instance
+
+      - name: Verify baseline scores are deterministic
+        run: |
+          python -c "
+          from src.environment import IncidentResponseEnv
+          from baseline.inference import run_all_tasks
+          env = IncidentResponseEnv()
+          r1 = run_all_tasks(env_instance=env, mode='rules')
+          r2 = run_all_tasks(env_instance=env, mode='rules')
+          for a, b in zip(r1, r2):
+              assert a['score'] == b['score'], f'Score not reproducible for {a[\"task_id\"]}: {a[\"score\"]} != {b[\"score\"]}'
+          print('Reproducibility check passed:', [(r[\"task_id\"], r[\"score\"]) for r in r1])
+          "
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t incident-response-triage:ci .
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name irt-test \
+            -p 7860:7860 \
+            incident-response-triage:ci
+          echo "Waiting for server to start..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:7860/health > /dev/null 2>&1; then
+              echo "Server is up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Verify health endpoint
+        run: curl -sf http://localhost:7860/health | python -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', f'Health check failed: {d}'; print('Health OK:', d)"
+
+      - name: Verify tasks endpoint
+        run: curl -sf http://localhost:7860/tasks | python -c "import sys,json; d=json.load(sys.stdin); assert len(d)>=3, f'Expected 3+ tasks, got {d}'; print('Tasks OK:', [t[\"task_id\"] for t in d])"
+
+      - name: Run full episode against container
+        run: |
+          python -c "
+          import httpx, json
+          base = 'http://localhost:7860'
+          # Reset
+          r = httpx.post(f'{base}/reset', json={'task_id': 'severity_classification'})
+          r.raise_for_status()
+          session_id = r.json()['session_id']
+          headers = {'X-Session-ID': session_id}
+          # Investigate
+          r = httpx.post(f'{base}/step', json={'action_type':'investigate','target':'postgres-primary','parameters':{},'reasoning':'check pool'}, headers=headers)
+          r.raise_for_status()
+          # Classify
+          r = httpx.post(f'{base}/step', json={'action_type':'classify','target':'','parameters':{'severity':'P2'},'reasoning':'P2'}, headers=headers)
+          r.raise_for_status()
+          assert r.json()['done'], 'Episode should be done after classify'
+          # Grade
+          r = httpx.post(f'{base}/grader', headers=headers)
+          r.raise_for_status()
+          score = r.json()['score']
+          assert score > 0.5, f'Score too low: {score}'
+          print(f'Docker E2E passed. Score: {score}')
+          "
+
+      - name: Verify metrics endpoint
+        run: curl -sf http://localhost:7860/metrics | python -c "import sys,json; d=json.load(sys.stdin); print('Metrics OK:', list(d.keys()))"
+
+      - name: Stop container
+        if: always()
+        run: docker stop irt-test && docker rm irt-test
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install ruff
+
+      - name: Run ruff (linter)
+        run: ruff check src/ baseline/ --select E,W,F --ignore E501
+        continue-on-error: true  # lint failures are warnings, not blockers
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile src/environment.py
+          python -m py_compile src/graders.py
+          python -m py_compile src/rewards.py
+          python -m py_compile src/scenarios.py
+          python -m py_compile src/models.py
+          python -m py_compile src/tasks.py
+          python -m py_compile inference.py
+          python -m py_compile app.py
+          python -m py_compile validate.py
+          echo "All files compile cleanly"
+
+      - name: Verify openenv.yaml is valid YAML
+        run: python -c "import yaml; yaml.safe_load(open('openenv.yaml')); print('openenv.yaml: valid YAML')"
+
+      - name: Verify Dockerfile exists and has required instructions
+        run: |
+          grep -q "FROM python" Dockerfile && echo "FROM: OK"
+          grep -q "EXPOSE 7860" Dockerfile && echo "EXPOSE: OK"
+          grep -q "HEALTHCHECK" Dockerfile && echo "HEALTHCHECK: OK"
+          grep -q "CMD" Dockerfile && echo "CMD: OK"
+          grep -q "USER appuser" Dockerfile && echo "Non-root user: OK"
