@@ -1028,3 +1028,204 @@ class TestPrometheusEndpoints:
         client, _ = client_and_session
         resp = client.get("/prometheus/query?query=irt_error_rate")
         assert resp.status_code == 400
+
+
+# ===========================================================================
+# 12.  TSDB RING BUFFER + /prometheus/query_range
+# ===========================================================================
+
+class TestTSDBRingBuffer:
+    """env.metric_history() accumulates one sample per step and drives query_range."""
+
+    def test_metric_history_empty_before_reset(self):
+        env = IncidentResponseEnv()
+        # No episode — live_metrics returns {}, metric_history returns {}
+        assert env.metric_history(0, 9999999999) == {}
+
+    def test_metric_history_has_step0_snapshot_after_reset(self):
+        env = IncidentResponseEnv()
+        env.reset("severity_classification", variant_seed=0)
+        import time
+        history = env.metric_history(time.time() - 10, time.time() + 1)
+        assert len(history) > 0, "Should have at least one service in history after reset"
+        # Each value is a list of (ts, ServiceMetrics) tuples
+        for svc, samples in history.items():
+            assert len(samples) >= 1, f"Expected >=1 sample for {svc} at step 0"
+            ts, m = samples[0]
+            assert isinstance(ts, float) and ts > 0
+            from src.models import ServiceMetrics
+            assert isinstance(m, ServiceMetrics)
+
+    def test_metric_history_grows_with_steps(self):
+        from src.models import Action, ActionType
+        import time
+        env = IncidentResponseEnv()
+        env.reset("severity_classification", variant_seed=0)
+        t_start = time.time() - 1
+        # step 0 is the reset snapshot; take 2 more steps
+        env.step(Action(action_type=ActionType.INVESTIGATE, target="user-api"))
+        env.step(Action(action_type=ActionType.INVESTIGATE, target="postgres-primary"))
+        t_end = time.time() + 1
+        history = env.metric_history(t_start, t_end)
+        for svc, samples in history.items():
+            assert len(samples) >= 2, (
+                f"Expected >=2 samples for {svc} after 2 steps, got {len(samples)}"
+            )
+
+    def test_metric_history_values_worsen_over_steps(self):
+        """Error rate for a blast-radius-affected service must increase over steps."""
+        from src.models import Action, ActionType
+        from src.scenarios import get_scenario
+        import time
+        env = IncidentResponseEnv()
+        env.reset("severity_classification", variant_seed=0)
+        scenario = get_scenario("severity_classification", variant_seed=0)
+        if not scenario.blast_radius:
+            return  # no blast radius on this variant — skip
+        t_start = time.time() - 1
+        for svc in scenario.available_services[:3]:
+            env.step(Action(action_type=ActionType.INVESTIGATE, target=svc))
+        t_end = time.time() + 1
+        history = env.metric_history(t_start, t_end)
+        # Find a blast-affected service
+        for svc in scenario.blast_radius:
+            samples = history.get(svc, [])
+            if len(samples) >= 2:
+                blast_metrics = scenario.blast_radius[svc]
+                for metric_key, (delta, _) in blast_metrics.items():
+                    if delta > 0 and metric_key == "error_rate":
+                        first_err = samples[0][1].error_rate
+                        last_err = samples[-1][1].error_rate
+                        assert last_err >= first_err, (
+                            f"{svc}.error_rate should worsen: {first_err} -> {last_err}"
+                        )
+                        return
+        # If we get here, no blast-radius metric was found — not a failure
+
+    def test_metric_history_ring_buffer_max(self):
+        """Ring buffer must not exceed _TSDB_MAX_SAMPLES per service."""
+        from src.models import Action, ActionType
+        env = IncidentResponseEnv()
+        env.reset("severity_classification", variant_seed=0)
+        # Take more steps than the ring buffer can hold by feeding CLASSIFY actions repeatedly
+        # (only one valid classify, rest are duplicates — just to advance step counter)
+        for _ in range(IncidentResponseEnv._TSDB_MAX_SAMPLES + 5):
+            if env._done:
+                break
+            env.step(Action(action_type=ActionType.CLASSIFY, parameters={"severity": "P2"}))
+        import time
+        history = env.metric_history(0, time.time() + 1)
+        for svc, samples in history.items():
+            assert len(samples) <= IncidentResponseEnv._TSDB_MAX_SAMPLES, (
+                f"Ring buffer exceeded max for {svc}: {len(samples)}"
+            )
+
+
+class TestPrometheusRangeQuery:
+    """The /prometheus/query_range endpoint returns proper Prometheus matrix output."""
+
+    @pytest.fixture()
+    def client_with_steps(self):
+        """Return (TestClient, session_id) with 3 investigate steps taken."""
+        from fastapi.testclient import TestClient
+        from app import app as _app
+        client = TestClient(_app, raise_server_exceptions=True)
+        resp = client.post("/reset", json={"task_id": "severity_classification", "variant_seed": 0})
+        assert resp.status_code == 200
+        sid = resp.json()["session_id"]
+        headers = {"X-Session-ID": sid}
+        for svc in ["user-api", "postgres-primary", "connection-pool-monitor"]:
+            client.post("/step",
+                json={"action_type": "investigate", "target": svc},
+                headers=headers,
+            )
+        return client, sid
+
+    def test_query_range_returns_matrix_envelope(self, client_with_steps):
+        client, sid = client_with_steps
+        resp = client.get(
+            "/prometheus/query_range?query=irt_error_rate",
+            headers={"X-Session-ID": sid},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["data"]["resultType"] == "matrix"
+        assert isinstance(data["data"]["result"], list)
+
+    def test_query_range_values_are_lists_not_single_point(self, client_with_steps):
+        """Matrix result must have 'values' (list) not 'value' (single point)."""
+        client, sid = client_with_steps
+        resp = client.get(
+            "/prometheus/query_range?query=irt_error_rate",
+            headers={"X-Session-ID": sid},
+        )
+        for stream in resp.json()["data"]["result"]:
+            assert "values" in stream, "Matrix stream must have 'values' key"
+            assert "value" not in stream, "Matrix stream must NOT have 'value' (that's instant)"
+            assert isinstance(stream["values"], list)
+            assert len(stream["values"]) >= 1
+
+    def test_query_range_each_value_is_timestamp_string_pair(self, client_with_steps):
+        client, sid = client_with_steps
+        resp = client.get(
+            "/prometheus/query_range?query=irt_cpu_percent",
+            headers={"X-Session-ID": sid},
+        )
+        for stream in resp.json()["data"]["result"]:
+            for pair in stream["values"]:
+                assert len(pair) == 2, "Each value must be [timestamp, string]"
+                ts, val_str = pair
+                assert isinstance(ts, (int, float))
+                float(val_str)  # must be parseable
+
+    def test_query_range_no_session_returns_400(self, client_with_steps):
+        client, _ = client_with_steps
+        resp = client.get("/prometheus/query_range?query=irt_error_rate")
+        assert resp.status_code == 400
+
+    def test_query_range_start_greater_than_end_returns_400(self, client_with_steps):
+        import time
+        client, sid = client_with_steps
+        now = time.time()
+        resp = client.get(
+            f"/prometheus/query_range?query=irt_error_rate&start={now+100}&end={now}",
+            headers={"X-Session-ID": sid},
+        )
+        assert resp.status_code == 400
+
+    def test_query_range_has_more_samples_than_instant_query(self, client_with_steps):
+        """Range query across all time should return multiple samples per service stream."""
+        client, sid = client_with_steps
+        resp = client.get(
+            "/prometheus/query_range?query=irt_error_rate&start=0&end=9999999999",
+            headers={"X-Session-ID": sid},
+        )
+        assert resp.status_code == 200
+        matrix = resp.json()["data"]["result"]
+        assert len(matrix) > 0, "Should have at least one stream"
+        # After 3 steps, each stream should have >=2 samples (step-0 + steps 1-3)
+        for stream in matrix:
+            assert len(stream["values"]) >= 2, (
+                f"Expected multiple samples in range, got {len(stream['values'])}"
+            )
+
+    def test_query_range_label_filter_works(self, client_with_steps):
+        """Service label filter on query_range narrows results."""
+        client, sid = client_with_steps
+        # Get all services
+        all_resp = client.get(
+            "/prometheus/query_range?query=irt_error_rate&start=0&end=9999999999",
+            headers={"X-Session-ID": sid},
+        )
+        all_svcs = {s["metric"]["service"] for s in all_resp.json()["data"]["result"]}
+        if len(all_svcs) < 2:
+            pytest.skip("Need >=2 services to test filter")
+        target = next(iter(all_svcs))
+        resp = client.get(
+            f'/prometheus/query_range?query=irt_error_rate{{service="{target}"}}&start=0&end=9999999999',
+            headers={"X-Session-ID": sid},
+        )
+        result = resp.json()["data"]["result"]
+        assert len(result) == 1
+        assert result[0]["metric"]["service"] == target

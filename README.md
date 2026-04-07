@@ -475,10 +475,34 @@ curl -H "X-Session-ID: $SID" \
 }
 ```
 
+### Range query — time-series matrix (TSDB ring buffer)
+```bash
+curl -H "X-Session-ID: $SID" \
+  "$BASE_URL/prometheus/query_range?query=irt_error_rate&start=0&end=9999999999"
+{
+  "status": "success",
+  "data": {
+    "resultType": "matrix",
+    "result": [
+      {
+        "metric": {"__name__": "irt_error_rate", "service": "postgres-primary", ...},
+        "values": [
+          [1712500000.0, "0.12"],
+          [1712500001.3, "0.19"],
+          [1712500002.7, "0.31"]
+        ]
+      }
+    ]
+  }
+}
+```
+The ring buffer holds up to **64 samples per service** (one per episode step). Metrics worsen with blast radius as the episode progresses — the matrix response shows the real degradation trend and lets agents detect early warning signals.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/prometheus/metrics` | GET | Prometheus text scrape (`?fmt=json` for JSON) |
-| `/prometheus/query?query=<selector>` | GET | Instant query with standard Prometheus JSON envelope |
+| `/prometheus/query?query=<selector>` | GET | Instant query — standard Prometheus JSON envelope (`resultType: vector`) |
+| `/prometheus/query_range?query=<selector>&start=<ts>&end=<ts>` | GET | Range query — Prometheus matrix response backed by TSDB ring buffer (64 samples / service) |
 
 Agents using `prometheus-api-client` or `requests-prom` work against these endpoints unchanged.
 

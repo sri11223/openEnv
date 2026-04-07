@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import copy
 import random
+import time
+from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from src.graders import grade
 from src.models import (
@@ -41,6 +43,9 @@ class IncidentResponseEnv:
         grader_result = env.grade()
     """
 
+    # How many per-step metric snapshots to retain per service
+    _TSDB_MAX_SAMPLES: int = 64
+
     def __init__(self) -> None:
         self._scenario: Optional[Scenario] = None
         self._task_id: Optional[str] = None
@@ -60,6 +65,9 @@ class IncidentResponseEnv:
         # Logs / metrics revealed so far
         self._revealed_logs: Dict[str, list] = {}
         self._revealed_metrics: Dict[str, Any] = {}
+        # TSDB ring buffer: service -> deque of (unix_timestamp, ServiceMetrics)
+        # Populated after every step so /prometheus/query_range returns real history.
+        self._metric_history: Dict[str, Deque[Tuple[float, ServiceMetrics]]] = {}
 
     # ------------------------------------------------------------------
     # reset()
@@ -89,6 +97,9 @@ class IncidentResponseEnv:
         self._last_message = "Incident opened. Review the alerts and begin your investigation."
         self._revealed_logs = {}
         self._revealed_metrics = {}
+        self._metric_history = {}
+        # Record step-0 snapshot so range queries have at least one data point
+        self._record_metric_snapshot()
         return self._build_observation()
 
     # ------------------------------------------------------------------
@@ -128,6 +139,9 @@ class IncidentResponseEnv:
 
         # Apply action state changes (after reward so duplicates are penalised first)
         self._apply_state_changes(action, scenario)
+
+        # Record metric snapshot into TSDB ring buffer
+        self._record_metric_snapshot()
 
         # Check episode termination
         done = self._check_done(scenario)
@@ -192,9 +206,45 @@ class IncidentResponseEnv:
             return {}
         return apply_blast_radius(self._scenario, self._step)
 
+    def metric_history(
+        self,
+        start: float,
+        end: float,
+        step_seconds: float = 1.0,
+    ) -> Dict[str, List[Tuple[float, ServiceMetrics]]]:
+        """Return per-service metric history in the [start, end] time window.
+
+        This powers the Prometheus-compatible ``/prometheus/query_range`` endpoint.
+        Each entry is a ``(unix_timestamp, ServiceMetrics)`` tuple, sampled once
+        per environment step.  The ``step_seconds`` parameter is accepted for
+        API compatibility but does not resample — the ring buffer already stores
+        one sample per episode step.
+
+        Returns an empty dict when no episode is in progress.
+        """
+        if not self._metric_history:
+            return {}
+        result: Dict[str, List[Tuple[float, ServiceMetrics]]] = {}
+        for svc, dq in self._metric_history.items():
+            samples = [(ts, m) for ts, m in dq if start <= ts <= end]
+            if samples:
+                result[svc] = samples
+        return result
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _record_metric_snapshot(self) -> None:
+        """Append the current blast-radius metrics to the per-service ring buffer."""
+        if self._scenario is None:
+            return
+        ts = time.time()
+        live = apply_blast_radius(self._scenario, self._step)
+        for svc, metrics in live.items():
+            if svc not in self._metric_history:
+                self._metric_history[svc] = deque(maxlen=self._TSDB_MAX_SAMPLES)
+            self._metric_history[svc].append((ts, metrics))
 
     def _process_action(self, action: Action, scenario: Scenario) -> None:
         """Process action effects (messages, state transitions)."""

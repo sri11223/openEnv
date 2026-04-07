@@ -129,6 +129,18 @@ jobs:
           assert data['status'] == 'success', 'Query failed'
           assert data['data']['resultType'] == 'vector'
           print('Prometheus query OK -', len(data['data']['result']), 'series')
+          r2 = httpx.get(base + '/prometheus/query_range?query=irt_error_rate&start=0&end=9999999999', headers=headers)
+          d2 = r2.json()
+          assert d2['status'] == 'success', 'Range query failed: ' + str(r2.status_code)
+          assert d2['data']['resultType'] == 'matrix', 'Expected matrix, got: ' + d2['data']['resultType']
+          streams = d2['data']['result']
+          assert len(streams) > 0, 'No streams in range query result'
+          for stream in streams:
+              assert 'values' in stream, 'Stream missing values key'
+              assert len(stream['values']) >= 1, 'Stream has no values'
+              ts, val = stream['values'][0]
+              float(val)  # must be parseable
+          print('Prometheus query_range OK -', len(streams), 'streams,', len(streams[0]['values']), 'samples')
           PYEOF
 
       - name: Stop container

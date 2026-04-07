@@ -9,6 +9,9 @@ Endpoints:
     POST /grader             – Get grader score for episode (requires X-Session-ID)
     POST /baseline           – Run rule-based baseline on all tasks (in-process)
     GET  /metrics            – Telemetry counters (JSON or Prometheus text)
+    GET  /prometheus/metrics – Live scenario service metrics (Prometheus text scrape)
+    GET  /prometheus/query   – PromQL instant query (standard Prometheus JSON envelope)
+    GET  /prometheus/query_range – PromQL range query (matrix, from TSDB ring buffer)
     GET  /render             – Human-readable incident dashboard (requires X-Session-ID)
     GET  /leaderboard        – Top scores per task from completed episodes
     GET  /health             – Standard OpenEnv liveness probe
@@ -249,6 +252,62 @@ def _build_prom_vector(
                 },
                 "value": [ts, str(val)],
             })
+    return results
+
+
+def _build_prom_matrix(
+    history: Dict[str, Any],
+    metric_name: str,
+    label_filters: Dict[str, str],
+    scenario_id: str,
+    incident_id: str,
+) -> List[Dict[str, Any]]:
+    """Build a Prometheus range-query matrix result from ring-buffer history.
+
+    ``history`` is the dict returned by ``env.metric_history(start, end)``:
+        {service_name: [(ts, ServiceMetrics), ...], ...}
+
+    Returns the standard Prometheus matrix result shape:
+        [{"metric": {...labels}, "values": [[ts, "value"], ...]}, ...]
+    """
+    if metric_name and not metric_name.startswith("irt_"):
+        metric_name = f"irt_{metric_name}"
+    field_map = {pn: fn for pn, fn, _ in _PROM_CORE_FIELDS}
+    candidates = [metric_name] if metric_name else [pn for pn, _, _ in _PROM_CORE_FIELDS]
+    # Build one result stream per (prom_name, service)
+    streams: Dict[tuple, List] = {}  # (prom_name, svc) -> [[ts, "val"],...]
+    for svc, samples in history.items():
+        if "service" in label_filters and label_filters["service"] != svc:
+            continue
+        if "scenario" in label_filters and label_filters["scenario"] != scenario_id:
+            continue
+        for prom_name in candidates:
+            field = field_map.get(prom_name)
+            for ts, m in samples:
+                if field is not None:
+                    val = getattr(m, field, 0.0)
+                elif prom_name.startswith("irt_custom_"):
+                    raw_key = prom_name[len("irt_custom_"):]
+                    val = (m.custom or {}).get(raw_key)
+                    if val is None:
+                        continue
+                else:
+                    continue
+                key = (prom_name, svc)
+                if key not in streams:
+                    streams[key] = []
+                streams[key].append([round(ts, 3), str(val)])
+    results: List[Dict[str, Any]] = []
+    for (prom_name, svc), values in streams.items():
+        results.append({
+            "metric": {
+                "__name__": prom_name,
+                "service": svc,
+                "scenario": scenario_id,
+                "incident": incident_id,
+            },
+            "values": sorted(values, key=lambda x: x[0]),
+        })
     return results
 
 
@@ -613,6 +672,57 @@ async def prometheus_instant_query(
         "data": {
             "resultType": "vector",
             "result": vector,
+        },
+    }
+
+
+@app.get("/prometheus/query_range")
+async def prometheus_range_query(
+    query: str,
+    start: float | None = None,
+    end: float | None = None,
+    step: float = 1.0,
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
+    """Prometheus range-query API (subset of /api/v1/query_range).
+
+    Returns a standard Prometheus **matrix** response from the per-session
+    TSDB ring buffer.  One sample is recorded per environment step, so the
+    timeseries reflects real metric degradation over the episode lifetime.
+
+    Parameters:
+        query: PromQL selector (same syntax as /prometheus/query)
+        start: Unix timestamp (inclusive). Defaults to episode start.
+        end:   Unix timestamp (inclusive). Defaults to now.
+        step:  Step duration seconds (accepted for API compatibility; ring buffer
+               has one sample per episode step regardless).
+
+    Example::
+
+        GET /prometheus/query_range?query=irt_error_rate&start=1712500000&end=1712500060
+    """
+    if not x_session_id or x_session_id not in _SESSION_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID. Call /reset first.",
+        )
+    env = _SESSION_REGISTRY[x_session_id]
+    now = time.time()
+    start_ts = start if start is not None else now - 3600
+    end_ts = end if end is not None else now
+    if start_ts > end_ts:
+        raise HTTPException(status_code=400, detail="start must be <= end")
+    history = env.metric_history(start_ts, end_ts, step_seconds=step)
+    if history is None or (not history and env.live_metrics() == {}):
+        raise HTTPException(status_code=400, detail="No active episode. Call /reset first.")
+    s = env.state()
+    metric_name, label_filters = _parse_prom_selector(query)
+    matrix = _build_prom_matrix(history, metric_name, label_filters, s.scenario_id, s.task_id)
+    return {
+        "status": "success",
+        "data": {
+            "resultType": "matrix",
+            "result": matrix,
         },
     }
 
