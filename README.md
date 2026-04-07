@@ -34,7 +34,7 @@ tags:
 <td><strong>Reward Components</strong></td><td>12 (dense, per-step)</td>
 </tr>
 <tr>
-<td><strong>Unit Tests</strong></td><td>121 / 121 passing</td>
+<td><strong>Unit Tests</strong></td><td>133 / 133 passing</td>
 </tr>
 <tr>
 <td><strong>Validation Checks</strong></td><td>7 / 7 passing</td>
@@ -437,8 +437,50 @@ tests/test_env.py::TestScenarioVariants::test_variant_seed_wraps_gracefully PASS
 # ... + 89 extended quality tests in tests/test_quality.py (all 7 scenarios,
 #     every reward component, temporal degradation, blast radius, partial credit,
 #     grader feedback quality, observation contract, YAML structure, inference script)
-121 passed in 77.36s
+133 passed in 47.88s
 ```
+
+---
+
+## Prometheus-Compatible Live Metrics
+
+Beyond the `investigate` action, the environment exposes **passive Prometheus observability** that an agent can query at any step without consuming an action slot — exactly as SREs query Grafana dashboards during incidents.
+
+### Text scrape (Prometheus exposition format)
+```bash
+curl -H "X-Session-ID: $SID" $BASE_URL/prometheus/metrics
+# HELP irt_error_rate HTTP error rate fraction 0.0-1.0
+# TYPE irt_error_rate gauge
+irt_error_rate{service="user-api",scenario="db-conn-pool-001",incident="severity_classification"} 0.13
+irt_error_rate{service="postgres-primary",scenario="db-conn-pool-001",incident="severity_classification"} 0.02
+...
+```
+Metrics **worsen automatically** with blast radius as the episode progresses — the agent observes real-time degradation, not a static snapshot.
+
+### Instant query (PromQL selector)
+```bash
+curl -H "X-Session-ID: $SID" \
+  "$BASE_URL/prometheus/query?query=irt_error_rate{service=\"payment-api\"}"
+{
+  "status": "success",
+  "data": {
+    "resultType": "vector",
+    "result": [
+      {
+        "metric": {"__name__": "irt_error_rate", "service": "payment-api", ...},
+        "value": [1712500000.0, "0.47"]
+      }
+    ]
+  }
+}
+```
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/prometheus/metrics` | GET | Prometheus text scrape (`?fmt=json` for JSON) |
+| `/prometheus/query?query=<selector>` | GET | Instant query with standard Prometheus JSON envelope |
+
+Agents using `prometheus-api-client` or `requests-prom` work against these endpoints unchanged.
 
 ---
 

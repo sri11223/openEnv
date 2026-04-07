@@ -693,7 +693,12 @@ class TestOpenEnvYaml:
 # ===========================================================================
 
 class TestInferenceScript:
-    """The root-level inference.py must run to completion and exit 0."""
+    """The root-level inference.py must run to completion and exit 0.
+
+    Tests that require actual episode steps to be taken are marked with
+    ``live_server`` — they start a local uvicorn process if one isn't
+    already listening on port 7860.
+    """
 
     def test_inference_exits_zero(self):
         result = subprocess.run(
@@ -708,6 +713,7 @@ class TestInferenceScript:
             f"stderr: {result.stderr[-1000:]}"
         )
 
+    @pytest.mark.usefixtures("live_server")
     def test_inference_stdout_has_start_markers(self):
         result = subprocess.run(
             [sys.executable, "inference.py"],
@@ -719,6 +725,7 @@ class TestInferenceScript:
         assert "[STEP]" in result.stdout, "inference.py stdout missing [STEP] markers"
         assert "[END]" in result.stdout, "inference.py stdout missing [END] markers"
 
+    @pytest.mark.usefixtures("live_server")
     def test_inference_produces_three_episodes(self):
         result = subprocess.run(
             [sys.executable, "inference.py"],
@@ -731,6 +738,7 @@ class TestInferenceScript:
         assert start_count == 3, f"Expected 3 [START] lines, got {start_count}"
         assert end_count == 3, f"Expected 3 [END] lines, got {end_count}"
 
+    @pytest.mark.usefixtures("live_server")
     def test_inference_scores_in_range(self):
         result = subprocess.run(
             [sys.executable, "inference.py"],
@@ -746,6 +754,7 @@ class TestInferenceScript:
                         score = float(part.split("=")[1])
                         assert 0.0 < score < 1.0, f"Score {score} not in (0,1): {line}"
 
+    @pytest.mark.usefixtures("live_server")
     def test_inference_all_done_true(self):
         result = subprocess.run(
             [sys.executable, "inference.py"],
@@ -834,3 +843,188 @@ class TestHardScenarioCoverage:
                with_red_herring.breakdown.get("investigation_precision", 0), (
             "Red herring investigations should not improve precision score"
         )
+
+
+# ===========================================================================
+# 11.  PROMETHEUS LIVE METRICS ENDPOINTS
+# ===========================================================================
+
+class TestPrometheusEndpoints:
+    """Verify /prometheus/metrics and /prometheus/query work correctly.
+
+    Uses FastAPI TestClient for in-process HTTP — no external server needed.
+    Confirms the Prometheus text format, JSON variant, blast-radius visibility,
+    PromQL label filters, and the standard Prometheus JSON response envelope.
+    """
+
+    @pytest.fixture()
+    def client_and_session(self):
+        """Return (TestClient, session_id) with a fresh easy episode started."""
+        from fastapi.testclient import TestClient
+        from app import app as _app
+        client = TestClient(_app, raise_server_exceptions=True)
+        resp = client.post("/reset", json={"task_id": "severity_classification", "variant_seed": 0})
+        assert resp.status_code == 200
+        session_id = resp.json()["session_id"]
+        return client, session_id
+
+    # ------------------------------------------------------------------
+    # /prometheus/metrics
+    # ------------------------------------------------------------------
+
+    def test_prometheus_metrics_returns_prometheus_content_type(self, client_and_session):
+        client, sid = client_and_session
+        resp = client.get("/prometheus/metrics", headers={"X-Session-ID": sid})
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+        assert "0.0.4" in resp.headers["content-type"]
+
+    def test_prometheus_metrics_text_contains_help_and_type_lines(self, client_and_session):
+        client, sid = client_and_session
+        resp = client.get("/prometheus/metrics", headers={"X-Session-ID": sid})
+        body = resp.text
+        assert "# HELP irt_error_rate" in body
+        assert "# TYPE irt_error_rate gauge" in body
+        assert "# HELP irt_cpu_percent" in body
+
+    def test_prometheus_metrics_text_contains_all_core_fields(self, client_and_session):
+        client, sid = client_and_session
+        resp = client.get("/prometheus/metrics", headers={"X-Session-ID": sid})
+        body = resp.text
+        for metric_name in (
+            "irt_cpu_percent", "irt_memory_percent", "irt_request_rate",
+            "irt_error_rate", "irt_latency_p50_ms", "irt_latency_p99_ms",
+        ):
+            assert metric_name in body, f"Expected '{metric_name}' in Prometheus output"
+
+    def test_prometheus_metrics_labels_include_service_and_scenario(self, client_and_session):
+        client, sid = client_and_session
+        resp = client.get("/prometheus/metrics", headers={"X-Session-ID": sid})
+        body = resp.text
+        # Per-service data lines (not the scalar irt_scenario_step) must have service= label
+        for line in body.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            if line.startswith("irt_scenario_step"):
+                # Scalar metric — no service label, only scenario+incident
+                assert 'scenario="' in line
+                continue
+            assert 'service="' in line, f"Missing service label in: {line}"
+            assert 'scenario="' in line, f"Missing scenario label in: {line}"
+
+    def test_prometheus_metrics_json_fmt_returns_dict(self, client_and_session):
+        client, sid = client_and_session
+        resp = client.get("/prometheus/metrics?fmt=json", headers={"X-Session-ID": sid})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, dict)
+        # Each value should be a ServiceMetrics-shaped dict
+        for svc, m in data.items():
+            assert "error_rate" in m, f"ServiceMetrics dict missing error_rate for {svc}"
+            assert "cpu_percent" in m
+
+    def test_prometheus_metrics_no_session_returns_400(self, client_and_session):
+        client, _ = client_and_session
+        resp = client.get("/prometheus/metrics")
+        assert resp.status_code == 400
+
+    def test_prometheus_metrics_blast_radius_visible_after_steps(self, client_and_session):
+        """Error rate in Prometheus output increases with blast radius over steps."""
+        client, sid = client_and_session
+        # Read baseline error_rate for the blast-affected service
+        def get_error_rates(body: str) -> dict:
+            rates: dict = {}
+            for line in body.splitlines():
+                if line.startswith("irt_error_rate{"):
+                    svc_match = __import__("re").search(r'service="([^"]+)"', line)
+                    if svc_match:
+                        val = float(line.split("} ")[1])
+                        rates[svc_match.group(1)] = val
+            return rates
+
+        resp0 = client.get("/prometheus/metrics", headers={"X-Session-ID": sid})
+        rates_step0 = get_error_rates(resp0.text)
+
+        # Take 3 investigate steps to advance the episode (blast radius applies per step)
+        from src.models import Action, ActionType
+        for svc in ["user-api", "postgres-primary", "connection-pool-monitor"]:
+            client.post("/step",
+                json={"action_type": "investigate", "target": svc},
+                headers={"X-Session-ID": sid},
+            )
+
+        resp3 = client.get("/prometheus/metrics", headers={"X-Session-ID": sid})
+        rates_step3 = get_error_rates(resp3.text)
+
+        # At least one service's metrics must have worsened (blast radius in action)
+        worsened = any(
+            rates_step3.get(svc, 0) >= rates_step0.get(svc, 0)
+            for svc in rates_step0
+        )
+        assert worsened, "Expected blast radius to worsen at least one service metric over 3 steps"
+
+    # ------------------------------------------------------------------
+    # /prometheus/query
+    # ------------------------------------------------------------------
+
+    def test_prometheus_query_returns_success_envelope(self, client_and_session):
+        client, sid = client_and_session
+        resp = client.get(
+            "/prometheus/query?query=irt_error_rate",
+            headers={"X-Session-ID": sid},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["data"]["resultType"] == "vector"
+        assert isinstance(data["data"]["result"], list)
+
+    def test_prometheus_query_auto_prefix_irt(self, client_and_session):
+        """Querying 'error_rate' (no irt_ prefix) should still return results."""
+        client, sid = client_and_session
+        resp = client.get(
+            "/prometheus/query?query=error_rate",
+            headers={"X-Session-ID": sid},
+        )
+        assert resp.status_code == 200
+        result = resp.json()["data"]["result"]
+        assert len(result) > 0, "Auto-prefixed query 'error_rate' returned no results"
+
+    def test_prometheus_query_service_label_filter(self, client_and_session):
+        client, sid = client_and_session
+        # Get all services first
+        all_resp = client.get(
+            "/prometheus/query?query=irt_error_rate",
+            headers={"X-Session-ID": sid},
+        )
+        all_services = [r["metric"]["service"] for r in all_resp.json()["data"]["result"]]
+        if len(all_services) < 2:
+            pytest.skip("Need at least 2 services to test label filter")
+        target_svc = all_services[0]
+        # Filtered query
+        resp = client.get(
+            f'/prometheus/query?query=irt_error_rate{{service="{target_svc}"}}',
+            headers={"X-Session-ID": sid},
+        )
+        assert resp.status_code == 200
+        result = resp.json()["data"]["result"]
+        assert len(result) == 1, f"Label filter should return exactly 1 result, got {len(result)}"
+        assert result[0]["metric"]["service"] == target_svc
+
+    def test_prometheus_query_result_has_value_pair(self, client_and_session):
+        """Each result entry must have [timestamp, value_string] as per Prometheus spec."""
+        client, sid = client_and_session
+        resp = client.get(
+            "/prometheus/query?query=irt_cpu_percent",
+            headers={"X-Session-ID": sid},
+        )
+        for entry in resp.json()["data"]["result"]:
+            assert len(entry["value"]) == 2, "Prometheus value must be [timestamp, value_string]"
+            ts, val_str = entry["value"]
+            assert isinstance(ts, (int, float)), "Timestamp must be numeric"
+            float(val_str)  # must be parseable as float
+
+    def test_prometheus_query_no_session_returns_400(self, client_and_session):
+        client, _ = client_and_session
+        resp = client.get("/prometheus/query?query=irt_error_rate")
+        assert resp.status_code == 400

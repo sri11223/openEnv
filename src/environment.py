@@ -22,6 +22,7 @@ from src.models import (
     IncidentStatus,
     Observation,
     Reward,
+    ServiceMetrics,
     StepResult,
 )
 from src.rewards import compute_step_reward
@@ -176,6 +177,20 @@ class IncidentResponseEnv:
         if self._scenario is None or self._task_id is None:
             raise RuntimeError("No episode in progress.")
         return grade(self._task_id, self.state(), self._scenario)
+
+    def live_metrics(self) -> Dict[str, ServiceMetrics]:
+        """Return service metrics with blast-radius degradation at the current step.
+
+        Safe to call at any point (including before any actions are taken).
+        Returns an empty dict when no episode is in progress.
+
+        This is the same numerical data the agent would eventually see via
+        investigate actions, but served here without consuming an action slot —
+        analogous to a Prometheus scrape that is always available passively.
+        """
+        if self._scenario is None:
+            return {}
+        return apply_blast_radius(self._scenario, self._step)
 
     # ------------------------------------------------------------------
     # Private helpers

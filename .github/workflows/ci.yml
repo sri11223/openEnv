@@ -32,11 +32,6 @@ jobs:
       - name: Run OpenEnv validation
         run: python validate.py
 
-      - name: Run baseline inference (rules mode)
-        run: python inference.py
-        env:
-          ENV_BASE_URL: ""  # inference.py direct mode uses env instance
-
       - name: Verify baseline scores are deterministic
         run: |
           python -c "
@@ -107,6 +102,29 @@ jobs:
 
       - name: Verify metrics endpoint
         run: curl -sf http://localhost:7860/metrics | python -c "import sys,json; d=json.load(sys.stdin); print('Metrics OK:', list(d.keys()))"
+
+      - name: Verify Prometheus live metrics endpoint
+        run: |
+          python -c "
+          import httpx
+          base = 'http://localhost:7860'
+          # Start a session first
+          r = httpx.post(f'{base}/reset', json={'task_id': 'severity_classification'})
+          sid = r.json()['session_id']
+          headers = {'X-Session-ID': sid}
+          # Check Prometheus text format
+          r = httpx.get(f'{base}/prometheus/metrics', headers=headers)
+          assert r.status_code == 200, f'Prometheus metrics returned {r.status_code}'
+          assert '# HELP irt_error_rate' in r.text, 'Missing HELP line'
+          assert 'irt_cpu_percent{' in r.text, 'Missing cpu_percent metric'
+          print('Prometheus /prometheus/metrics OK')
+          # Check instant query
+          r = httpx.get(f'{base}/prometheus/query?query=irt_error_rate', headers=headers)
+          data = r.json()
+          assert data['status'] == 'success', f'Query failed: {data}'
+          assert data['data']['resultType'] == 'vector'
+          print(f'Prometheus /prometheus/query OK ({len(data[\"data\"][\"result\"])} series)')
+          "
 
       - name: Stop container
         if: always()

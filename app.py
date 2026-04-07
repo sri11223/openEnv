@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import secrets
 import time
 import traceback
@@ -30,7 +31,7 @@ from typing import Any, Dict, List
 
 from fastapi import Body, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from src.environment import IncidentResponseEnv
@@ -128,6 +129,127 @@ def _record_leaderboard(task_id: str, score: float, steps: int) -> None:
     board.append({"score": score, "steps": steps, "ts": round(time.time())})
     board.sort(key=lambda e: (-e["score"], e["steps"]))
     del board[_LEADERBOARD_SIZE:]  # keep top-N
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metric helpers
+# ---------------------------------------------------------------------------
+
+# (prom_metric_name, ServiceMetrics field, HELP text)
+_PROM_CORE_FIELDS: List[tuple] = [
+    ("irt_cpu_percent",    "cpu_percent",    "CPU utilisation percent"),
+    ("irt_memory_percent", "memory_percent", "Memory utilisation percent"),
+    ("irt_request_rate",   "request_rate",   "Requests per second"),
+    ("irt_error_rate",     "error_rate",     "HTTP error rate fraction 0.0-1.0"),
+    ("irt_latency_p50_ms", "latency_p50_ms", "P50 response latency milliseconds"),
+    ("irt_latency_p99_ms", "latency_p99_ms", "P99 response latency milliseconds"),
+]
+
+
+def _scenario_live_to_prom_text(
+    live: Dict[str, Any],
+    scenario_id: str,
+    incident_id: str,
+    step: int,
+) -> str:
+    """Serialize live scenario metrics to Prometheus text exposition format."""
+    lines: List[str] = [
+        f'# HELP irt_scenario_step Current episode step number',
+        f'# TYPE irt_scenario_step gauge',
+        f'irt_scenario_step{{scenario="{scenario_id}",incident="{incident_id}"}} {step}',
+    ]
+    for prom_name, field, help_text in _PROM_CORE_FIELDS:
+        lines += [
+            f"# HELP {prom_name} {help_text}",
+            f"# TYPE {prom_name} gauge",
+        ]
+        for svc, m in live.items():
+            val = getattr(m, field, 0.0)
+            lines.append(
+                f'{prom_name}{{service="{svc}",scenario="{scenario_id}",incident="{incident_id}"}} {val}'
+            )
+    # Custom metrics (e.g. connection_pool_used, heap_mb, ...)
+    all_custom: Dict[str, str] = {}  # prom_name -> raw key
+    for m in live.values():
+        for raw_key in (m.custom or {}):
+            prom_key = "irt_custom_" + re.sub(r"[^a-zA-Z0-9_]", "_", raw_key)
+            all_custom[prom_key] = raw_key
+    for prom_key in sorted(all_custom):
+        raw_key = all_custom[prom_key]
+        lines += [
+            f"# HELP {prom_key} Custom scenario metric: {raw_key}",
+            f"# TYPE {prom_key} gauge",
+        ]
+        for svc, m in live.items():
+            val = (m.custom or {}).get(raw_key)
+            if val is not None:
+                lines.append(
+                    f'{prom_key}{{service="{svc}",scenario="{scenario_id}",incident="{incident_id}"}} {val}'
+                )
+    return "\n".join(lines) + "\n"
+
+
+_PROM_SELECTOR_RE = re.compile(
+    r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)?(?:\{(?P<labels>[^}]*)\})?$"
+)
+_PROM_LABEL_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+
+
+def _parse_prom_selector(query: str) -> tuple[str, Dict[str, str]]:
+    """Parse a simple PromQL instant selector into (metric_name, label_filters)."""
+    m = _PROM_SELECTOR_RE.match(query.strip())
+    if not m:
+        return query.strip(), {}
+    name = m.group("name") or ""
+    label_str = m.group("labels") or ""
+    filters: Dict[str, str] = {
+        lm.group(1): lm.group(2)
+        for lm in _PROM_LABEL_RE.finditer(label_str)
+    }
+    return name, filters
+
+
+def _build_prom_vector(
+    live: Dict[str, Any],
+    metric_name: str,
+    label_filters: Dict[str, str],
+    scenario_id: str,
+    incident_id: str,
+) -> List[Dict[str, Any]]:
+    """Build a Prometheus instant-query vector result list."""
+    ts = round(time.time(), 3)
+    # Normalise: auto-prefix irt_ when caller omits it
+    if metric_name and not metric_name.startswith("irt_"):
+        metric_name = f"irt_{metric_name}"
+    field_map = {pn: fn for pn, fn, _ in _PROM_CORE_FIELDS}
+    candidates = [metric_name] if metric_name else [pn for pn, _, _ in _PROM_CORE_FIELDS]
+    results: List[Dict[str, Any]] = []
+    for prom_name in candidates:
+        field = field_map.get(prom_name)
+        for svc, m in live.items():
+            if "service" in label_filters and label_filters["service"] != svc:
+                continue
+            if "scenario" in label_filters and label_filters["scenario"] != scenario_id:
+                continue
+            if field is not None:
+                val = getattr(m, field, 0.0)
+            elif prom_name.startswith("irt_custom_"):
+                raw_key = prom_name[len("irt_custom_"):]
+                val = (m.custom or {}).get(raw_key)
+                if val is None:
+                    continue
+            else:
+                continue
+            results.append({
+                "metric": {
+                    "__name__": prom_name,
+                    "service": svc,
+                    "scenario": scenario_id,
+                    "incident": incident_id,
+                },
+                "value": [ts, str(val)],
+            })
+    return results
 
 
 @asynccontextmanager
@@ -341,7 +463,7 @@ async def metrics(format: str = "json"):
         for key, value in _TELEMETRY.items():
             lines.append(f'irt_{key} {value}')
         lines.append(f'irt_active_sessions {len(_SESSION_REGISTRY)}')
-        from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
     return {
         **_TELEMETRY,
@@ -419,6 +541,79 @@ async def leaderboard():
     return {
         task_id: board
         for task_id, board in _LEADERBOARD.items()
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prometheus-compatible live metrics endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/prometheus/metrics")
+async def prometheus_scenario_metrics(
+    fmt: str = "text",
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
+    """Prometheus text-format scrape endpoint for the current scenario state.
+
+    Returns all service metrics with blast-radius degradation applied at the
+    current step — the system degrades the longer the agent waits, exactly as
+    in production Prometheus. No action cost: purely passive observability.
+
+    - ``?fmt=text`` (default) — Prometheus text exposition format (standard scrape)
+    - ``?fmt=json``           — JSON dict keyed by service name
+    """
+    if not x_session_id or x_session_id not in _SESSION_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID. Call /reset first.",
+        )
+    env = _SESSION_REGISTRY[x_session_id]
+    live = env.live_metrics()
+    if not live:
+        raise HTTPException(status_code=400, detail="No active episode. Call /reset first.")
+    s = env.state()
+    if fmt == "json":
+        return {svc: m.model_dump() for svc, m in live.items()}
+    prom_text = _scenario_live_to_prom_text(live, s.scenario_id, s.task_id, s.step_number)
+    return PlainTextResponse(prom_text, media_type="text/plain; version=0.0.4")
+
+
+@app.get("/prometheus/query")
+async def prometheus_instant_query(
+    query: str,
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
+    """Simplified Prometheus instant-query API (subset of /api/v1/query).
+
+    Returns a standard Prometheus JSON response envelope so agents can use
+    ``prometheus-api-client`` or any PromQL helper directly.  No server-side
+    evaluation of complex PromQL — selectors only.
+
+    Supported selectors::
+
+        irt_error_rate                            # all services
+        irt_error_rate{service="auth-service"}    # specific service
+        error_rate{service="payment-api"}         # irt_ prefix auto-added
+        {service="payment-api"}                   # all metrics for one service
+    """
+    if not x_session_id or x_session_id not in _SESSION_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID. Call /reset first.",
+        )
+    env = _SESSION_REGISTRY[x_session_id]
+    live = env.live_metrics()
+    if not live:
+        raise HTTPException(status_code=400, detail="No active episode. Call /reset first.")
+    s = env.state()
+    metric_name, label_filters = _parse_prom_selector(query)
+    vector = _build_prom_vector(live, metric_name, label_filters, s.scenario_id, s.task_id)
+    return {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": vector,
+        },
     }
 
 
