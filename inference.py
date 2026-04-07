@@ -46,44 +46,47 @@ TEMPERATURE = 0.0
 MAX_TOKENS = 400
 GLOBAL_TIMEOUT_SECONDS = 1080  # 18 min hard cap (spec requires <20 min)
 
+ENV_BENCHMARK = "incident_response_triage"
+SUCCESS_THRESHOLD = 0.5
+
 # ---------------------------------------------------------------------------
 # Structured logging helpers — [START], [STEP], [END] format
 # ---------------------------------------------------------------------------
 
-def _log_start(task_id: str, mode: str, model: str | None = None) -> None:
+def _log_start(task_id: str, model: str) -> None:
     """Emit a [START] log to stdout."""
-    model_part = f" model={model}" if model else ""
-    print(f"[START] task={task_id} mode={mode}{model_part}", flush=True)
+    print(f"[START] task={task_id} env={ENV_BENCHMARK} model={model}", flush=True)
 
 
 def _log_step(
-    task_id: str,
     step: int,
     action: Dict[str, Any],
     reward: float,
-    cumulative_reward: float,
     done: bool,
+    error: str | None = None,
 ) -> None:
     """Emit a [STEP] log to stdout."""
+    action_str = json.dumps(action, separators=(",", ":"))
+    error_val = error if error else "null"
+    done_val = str(done).lower()
     print(
-        f"[STEP] task={task_id} step={step} reward={round(reward, 4)}"
-        f" cumulative_reward={round(cumulative_reward, 4)} done={done}",
+        f"[STEP] step={step} action={action_str} reward={reward:.2f}"
+        f" done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def _log_end(
-    task_id: str,
+    success: bool,
+    steps: int,
     score: float,
-    total_steps: int,
-    total_reward: float,
-    breakdown: Dict[str, float] | None = None,
-    feedback: str = "",
+    rewards: List[float],
 ) -> None:
     """Emit an [END] log to stdout."""
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] task={task_id} score={round(score, 4)} steps={total_steps}"
-        f" total_reward={round(total_reward, 4)}",
+        f"[END] success={str(success).lower()} steps={steps}"
+        f" score={score:.2f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -213,7 +216,7 @@ def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
     actions = RULE_BASED_ACTIONS[task_id]()
     client = httpx.Client(base_url=env_url, timeout=20.0)
 
-    _log_start(task_id, mode="rules")
+    _log_start(task_id, model=MODEL_NAME)
 
     resp = client.post("/reset", json={"task_id": task_id, "variant_seed": 0})
     resp.raise_for_status()
@@ -223,6 +226,7 @@ def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
     total_reward = 0.0
     steps = 0
     done = False
+    reward_list: List[float] = []
 
     for act_dict in actions:
         if done:
@@ -234,14 +238,14 @@ def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
         total_reward += reward_val
         steps += 1
         done = result["done"]
+        reward_list.append(reward_val)
 
         _log_step(
-            task_id=task_id,
             step=steps,
             action=act_dict,
             reward=reward_val,
-            cumulative_reward=total_reward,
             done=done,
+            error=None,
         )
 
     resp = client.post("/grader", headers=headers)
@@ -249,12 +253,10 @@ def run_episode_rules(task_id: str, env_url: str) -> Dict[str, Any]:
     grader = resp.json()
 
     _log_end(
-        task_id=task_id,
+        success=grader["score"] >= SUCCESS_THRESHOLD,
+        steps=steps,
         score=grader["score"],
-        total_steps=steps,
-        total_reward=total_reward,
-        breakdown=grader.get("breakdown"),
-        feedback=grader.get("feedback", ""),
+        rewards=reward_list,
     )
 
     return {
@@ -281,7 +283,7 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
     )
     client = httpx.Client(base_url=env_url, timeout=20.0)
 
-    _log_start(task_id, mode="llm", model=MODEL_NAME)
+    _log_start(task_id, model=MODEL_NAME)
 
     # Reset environment
     resp = client.post("/reset", json={"task_id": task_id})
@@ -293,6 +295,7 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
     total_reward = 0.0
     steps = 0
     done = False
+    reward_list: List[float] = []
     messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     max_steps = obs.get("max_steps", MAX_STEPS_OVERRIDE)
@@ -340,14 +343,14 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
         total_reward += reward_val
         steps += 1
         done = result["done"]
+        reward_list.append(reward_val)
 
         _log_step(
-            task_id=task_id,
             step=steps,
             action=action_dict,
             reward=reward_val,
-            cumulative_reward=total_reward,
             done=done,
+            error=None,
         )
 
     # Final grader
@@ -356,12 +359,10 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
     grader = resp.json()
 
     _log_end(
-        task_id=task_id,
+        success=grader["score"] >= SUCCESS_THRESHOLD,
+        steps=steps,
         score=grader["score"],
-        total_steps=steps,
-        total_reward=total_reward,
-        breakdown=grader.get("breakdown"),
-        feedback=grader.get("feedback", ""),
+        rewards=reward_list,
     )
 
     return {
@@ -412,8 +413,7 @@ def main():
         except Exception as exc:
             _info(f"  Task: {task_id:30s}  ERROR: {exc}")
             # Emit structured error logs even on failure
-            _log_end(task_id=task_id, score=0.0, total_steps=0, total_reward=0.0,
-                     feedback=f"Error: {exc}")
+            _log_end(success=False, steps=0, score=0.0, rewards=[])
 
     _info("=" * 60)
     if results:
