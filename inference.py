@@ -20,7 +20,6 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import httpx
@@ -53,15 +52,8 @@ GLOBAL_TIMEOUT_SECONDS = 1080  # 18 min hard cap (spec requires <20 min)
 
 def _log_start(task_id: str, mode: str, model: str | None = None) -> None:
     """Emit a [START] log to stdout."""
-    entry = {
-        "event": "START",
-        "task_id": task_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "mode": mode,
-    }
-    if model:
-        entry["model"] = model
-    print(json.dumps(entry), flush=True)
+    model_part = f" model={model}" if model else ""
+    print(f"[START] task={task_id} mode={mode}{model_part}", flush=True)
 
 
 def _log_step(
@@ -73,16 +65,11 @@ def _log_step(
     done: bool,
 ) -> None:
     """Emit a [STEP] log to stdout."""
-    entry = {
-        "event": "STEP",
-        "task_id": task_id,
-        "step": step,
-        "action": action,
-        "reward": round(reward, 4),
-        "cumulative_reward": round(cumulative_reward, 4),
-        "done": done,
-    }
-    print(json.dumps(entry), flush=True)
+    print(
+        f"[STEP] task={task_id} step={step} reward={round(reward, 4)}"
+        f" cumulative_reward={round(cumulative_reward, 4)} done={done}",
+        flush=True,
+    )
 
 
 def _log_end(
@@ -94,18 +81,11 @@ def _log_end(
     feedback: str = "",
 ) -> None:
     """Emit an [END] log to stdout."""
-    entry = {
-        "event": "END",
-        "task_id": task_id,
-        "score": round(score, 4),
-        "total_steps": total_steps,
-        "total_reward": round(total_reward, 4),
-    }
-    if breakdown:
-        entry["breakdown"] = {k: round(v, 4) for k, v in breakdown.items()}
-    if feedback:
-        entry["feedback"] = feedback
-    print(json.dumps(entry), flush=True)
+    print(
+        f"[END] task={task_id} score={round(score, 4)} steps={total_steps}"
+        f" total_reward={round(total_reward, 4)}",
+        flush=True,
+    )
 
 
 def _info(msg: str) -> None:
