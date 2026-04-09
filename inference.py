@@ -305,16 +305,29 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
     max_steps = obs.get("max_steps", MAX_STEPS_OVERRIDE)
 
     while not done and steps < max_steps:
+        # Trim observation to the fields the LLM actually needs —
+        # avoids context overflow on long episodes (e.g. full_incident_management)
+        trimmed_obs = {k: obs[k] for k in (
+            "step_number", "max_steps", "task_id", "task_description",
+            "alerts", "available_services", "investigated_services",
+            "incident_status", "severity_classified", "diagnosis",
+            "actions_taken", "logs", "metrics",
+        ) if k in obs}
+        # Keep only system prompt + last 4 turns to stay within context window
+        history_turns = messages[1:][-4:]
+        context = [messages[0]] + history_turns
+
         user_msg = (
-            f"Current observation (step {obs.get('step_number', steps)}/{max_steps}):\n"
-            f"{json.dumps(obs, indent=2, default=str)}\n\n"
+            f"Current observation (step {trimmed_obs.get('step_number', steps)}/{max_steps}):\n"
+            f"{json.dumps(trimmed_obs, indent=2, default=str)}\n\n"
             "What is your next action? Return ONLY a JSON object."
         )
+        context.append({"role": "user", "content": user_msg})
         messages.append({"role": "user", "content": user_msg})
 
         completion = llm.chat.completions.create(
             model=MODEL_NAME,
-            messages=messages,
+            messages=context,
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
         )
