@@ -32,8 +32,11 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 
-# Environment endpoint (this OpenEnv server, not the LLM endpoint)
-ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:7860")
+# Environment endpoint — defaults to the live HF Space; override for local dev
+ENV_BASE_URL = os.getenv("ENV_BASE_URL", "https://srikrishna2005-openenv.hf.space")
+
+# Optional — used when loading the environment from a local Docker image
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 
 TASK_IDS = [
     "severity_classification",
