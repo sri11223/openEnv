@@ -9,6 +9,7 @@ Endpoints:
     POST /grader             – Get grader score for episode (requires X-Session-ID)
     POST /baseline           – Run rule-based baseline on all tasks (in-process)
     GET  /metrics            – Telemetry counters (JSON or Prometheus text)
+    GET  /curriculum         – Curriculum learning progression (ordered task stages)
     GET  /prometheus/metrics – Live scenario service metrics (Prometheus text scrape)
     GET  /prometheus/query   – PromQL instant query (standard Prometheus JSON envelope)
     GET  /prometheus/query_range – PromQL range query (matrix, from TSDB ring buffer)
@@ -603,9 +604,77 @@ async def leaderboard():
     }
 
 
-# ---------------------------------------------------------------------------
-# Prometheus-compatible live metrics endpoints
-# ---------------------------------------------------------------------------
+@app.get("/curriculum")
+async def curriculum():
+    """Return the ordered curriculum learning progression for this environment.
+
+    Tasks are listed from easiest to hardest so training agents can be
+    scheduled to start from the first stage and progressively advance.
+    Each stage carries the metadata needed to build a curriculum sampler:
+    task_id, difficulty label, reward dimension count, step budget,
+    temporal degradation rate, and number of distinct scenario variants.
+    """
+    return {
+        "description": (
+            "Curriculum from easy to hard: agents accumulate reward signal "
+            "from the first episode and progressively face more complex scenarios."
+        ),
+        "stages": [
+            {
+                "stage": 1,
+                "task_id": "severity_classification",
+                "difficulty": "easy",
+                "reward_components": 3,
+                "max_steps": 10,
+                "degradation_per_step": 0.005,
+                "variants": 2,
+                "graded_dimensions": ["severity_accuracy", "investigation_quality", "efficiency"],
+                "rationale": (
+                    "Introduces the action loop. Model must investigate then classify. "
+                    "Guaranteed non-zero reward even with minimal exploration."
+                ),
+            },
+            {
+                "stage": 2,
+                "task_id": "root_cause_analysis",
+                "difficulty": "medium",
+                "reward_components": 5,
+                "max_steps": 15,
+                "degradation_per_step": 0.010,
+                "variants": 2,
+                "graded_dimensions": [
+                    "severity_accuracy", "investigated_root_cause",
+                    "diagnosis_accuracy", "remediation_quality", "efficiency",
+                ],
+                "rationale": (
+                    "Requires causal reasoning: distinguish root cause from downstream symptoms. "
+                    "Adds diagnosis and remediation actions not present in stage 1."
+                ),
+            },
+            {
+                "stage": 3,
+                "task_id": "full_incident_management",
+                "difficulty": "hard",
+                "reward_components": 8,
+                "max_steps": 20,
+                "degradation_per_step": 0.015,
+                "variants": 3,
+                "graded_dimensions": [
+                    "severity_accuracy", "diagnosis_accuracy", "remediation_quality",
+                    "escalation_quality", "communication", "investigation_thoroughness",
+                    "investigation_precision", "efficiency",
+                ],
+                "rationale": (
+                    "Full incident commander workflow requiring all 6 action types. "
+                    "Includes red-herring services. Tests strategic investigation under "
+                    "cascading blast-radius temporal pressure."
+                ),
+            },
+        ],
+    }
+
+
+
 
 @app.get("/prometheus/metrics")
 async def prometheus_scenario_metrics(

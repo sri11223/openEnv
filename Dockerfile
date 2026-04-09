@@ -20,6 +20,9 @@ USER appuser
 # HF Spaces requires port 7860
 EXPOSE 7860
 
+# Enable visual web testing at /web (bootcamp requirement)
+ENV ENABLE_WEB_INTERFACE=true
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health').read()"
 

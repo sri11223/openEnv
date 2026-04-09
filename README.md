@@ -34,7 +34,7 @@ tags:
 <td><strong>Reward Components</strong></td><td>12 (dense, per-step)</td>
 </tr>
 <tr>
-<td><strong>Unit Tests</strong></td><td>133 / 133 passing</td>
+<td><strong>Unit Tests</strong></td><td>145 / 145 passing</td>
 </tr>
 <tr>
 <td><strong>Validation Checks</strong></td><td>7 / 7 passing</td>
@@ -273,6 +273,11 @@ curl https://<your-username>-incident-response-triage.hf.space/
 | `GET` | `/metrics` | — | Telemetry counters (JSON or `?format=prometheus`) |
 | `GET` | `/render` | `X-Session-ID` | Human-readable Markdown incident dashboard |
 | `GET` | `/leaderboard` | — | Top-10 scores per task from completed episodes |
+| `GET` | `/curriculum` | — | Ordered curriculum learning stages with difficulty metadata |
+| `GET` | `/prometheus/metrics` | opt. `X-Session-ID` | Prometheus text scrape of live scenario service metrics |
+| `GET` | `/prometheus/query` | opt. `X-Session-ID` | PromQL instant query (standard Prometheus JSON envelope) |
+| `GET` | `/prometheus/query_range` | opt. `X-Session-ID` | PromQL range query — matrix result from TSDB ring buffer |
+| `GET` | `/web` | — | Interactive browser-based incident dashboard (WebSocket-backed) |
 
 > **Session flow:** `/reset` returns a `session_id`. Pass it as the `X-Session-ID` HTTP header on all subsequent `/step`, `/state`, `/grader`, and `/render` calls. This enables safe concurrent multi-agent evaluation.
 
@@ -397,7 +402,7 @@ ALL CHECKS PASSED
 
 ---
 
-## Test Suite (32 / 32 Passing)
+## Test Suite (145 / 145 Passing)
 
 Running `pytest tests/ -v`:
 
@@ -437,7 +442,9 @@ tests/test_env.py::TestScenarioVariants::test_variant_seed_wraps_gracefully PASS
 # ... + 89 extended quality tests in tests/test_quality.py (all 7 scenarios,
 #     every reward component, temporal degradation, blast radius, partial credit,
 #     grader feedback quality, observation contract, YAML structure, inference script)
-133 passed in 47.88s
+# ... + 12 Prometheus live metrics endpoint tests
+# ... + 12 TSDB ring-buffer range-query tests
+145 passed in 104.91s
 ```
 
 ---
@@ -653,6 +660,61 @@ Graders return detailed, actionable feedback with ✓/~/✗ prefixes explaining 
 
 ---
 
+## Curriculum Learning
+
+Tasks are designed as a **3-stage curriculum** following the bootcamp principle: *start with simple variants and progressively increase complexity so the model receives non-zero reward from the very first episode.*
+
+| Stage | Task | Difficulty | Reward Dims | Max Steps | Degradation/Step | Variants |
+|-------|------|-----------|-------------|-----------|-----------------|----------|
+| 1 | `severity_classification` | Easy | 3 | 10 | 0.005 | 2 |
+| 2 | `root_cause_analysis` | Medium | 5 | 15 | 0.010 | 2 |
+| 3 | `full_incident_management` | Hard | 8 | 20 | 0.015 | 3 |
+
+The rule-based baseline scores **0.99 / 0.99 / 0.93** on stages 1-3 respectively, confirming that even a minimal agent receives strong reward signal from day one. Query the `/curriculum` endpoint for machine-readable stage metadata.
+
+---
+
+## Process Supervision
+
+This environment implements **per-step shaped rewards** — every action receives immediate feedback, not just a binary end-of-episode signal. This is a prerequisite for training agents with RL using intermediate reward:
+
+| Component | Value | Signal |
+|-----------|-------|--------|
+| `relevant_investigation` | +0.06 | Positive immediately when the right service is investigated |
+| `irrelevant_investigation` | −0.02 | Negative feedback on wasted steps |
+| `duplicate_investigation` | −0.03 | Penalises redundant actions |
+| `correct_classification` | +0.15 | Rewards correct P-level assignment |
+| `correct_diagnosis` | +0.15 | Rewards identifying the real root cause |
+| `correct_remediation` | +0.12 | Rewards applying the right fix |
+| `escalation_quality` | +0.08 | Rewards notifying the expected teams |
+| `communication` | +0.03 | Rewards status updates to any channel |
+| `reasoning_bonus` | +0.005–0.02 | **Process token supervision** — agent's free-text `reasoning` field is scored; mentioning relevant services or causal keywords earns higher bonus |
+| `temporal_degradation` | −0.005 to −0.015/step | Urgency pressure; scales with task difficulty |
+
+The `reasoning_bonus` component implements lightweight **thinking-token supervision**: an agent that writes `"redis eviction is causing session token loss"` gets +0.02 vs +0.005 for uninformative reasoning. This incentivises the agent to explain its reasoning at every step, not just at the end.
+
+---
+
+## Reward Hacking Mitigations
+
+Several design choices directly prevent the agent from exploiting the reward function:
+
+1. **12 independent reward components** — optimising one component (e.g., always escalating) does not help any other. An agent must genuinely perform the correct action in the correct sequence to maximise total reward.
+
+2. **7 scenario variants** (`variant_seed`) — the agent cannot memorise correct answers for a single scenario. Evaluation with random seeds (`variant_seed = random.randint(0, 99)`) tests generalisation.
+
+3. **Deterministic grader** — scoring is keyword-matched and rule-based (no neural judge that can be exploited with prompt injection or adversarial text).
+
+4. **Red herring services** — in the hard task, 4 of 8 services are irrelevant. Investigating them incurs `−0.02` and reduces `investigation_precision` in the final grade. An agent that investigates everything scores lower than one that investigates strategically.
+
+5. **Temporal degradation** — rewards decay per step. An agent that repeats actions (e.g., re-investigating known services) scores significantly lower.
+
+6. **Negative rewards for invalid / duplicate / wrong actions** — the reward function actively penalises bad behaviour, not just withholds positive reward.
+
+7. **Score clamped to (0.01, 0.99)** — prevents degenerate all-zero or all-one gradients during training.
+
+---
+
 ## Pre-Submission Checklist
 
 - [x] HF Space deploys and responds to `GET /` with 200
@@ -669,6 +731,11 @@ Graders return detailed, actionable feedback with ✓/~/✗ prefixes explaining 
 - [x] OpenAI Client used for all LLM calls
 - [x] Runtime < 20 minutes on vcpu=2, 8GB RAM
 - [x] `python validate.py` passes all checks
+- [x] `ENABLE_WEB_INTERFACE=true` set in `Dockerfile` — visual testing at `/web`
+- [x] `/curriculum` endpoint exposes ordered learning stages
+- [x] Curriculum progression: easy (3 dims) → medium (5 dims) → hard (8 dims)
+- [x] Process supervision: `reasoning_bonus` scores agent thinking tokens per step
+- [x] Reward hacking mitigated: 12 independent components, 7 variants, deterministic grader
 
 ---
 

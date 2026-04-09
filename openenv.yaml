@@ -55,6 +55,47 @@ tasks:
       apply multiple remediations, escalate to correct teams, and post
       status communications.  Tests the full incident commander workflow.
 
+curriculum:
+  description: >
+    Tasks are ordered from easy to hard so agents accumulate reward
+    signal from the first episode and progressively face more complex
+    scenarios.  Train in order: severity_classification →
+    root_cause_analysis → full_incident_management.
+  stages:
+    - stage: 1
+      task_id: severity_classification
+      difficulty: easy
+      reward_components: 3
+      max_steps: 10
+      degradation_per_step: 0.005
+      variants: 2
+      rationale: >
+        Introduces the action loop.  Binary classification forces the
+        model to investigate first, then decide.  Guaranteed non-zero
+        reward even with random investigation.
+    - stage: 2
+      task_id: root_cause_analysis
+      difficulty: medium
+      reward_components: 5
+      max_steps: 15
+      degradation_per_step: 0.010
+      variants: 2
+      rationale: >
+        Adds multi-symptom causal reasoning.  Model must distinguish
+        root cause from downstream symptoms.  Introduces diagnosis and
+        remediation actions not present in stage 1.
+    - stage: 3
+      task_id: full_incident_management
+      difficulty: hard
+      reward_components: 8
+      max_steps: 20
+      degradation_per_step: 0.015
+      variants: 3
+      rationale: >
+        Full incident commander workflow requiring all 6 action types.
+        Includes red-herring services.  Tests strategic investigation
+        under time pressure with cascading blast-radius degradation.
+
 action_space:
   type: object
   properties:
@@ -190,6 +231,18 @@ endpoints:
   - path: /leaderboard
     method: GET
     description: "Return top-N episode scores."
+  - path: /curriculum
+    method: GET
+    description: "Curriculum learning progression — returns ordered task stages with metadata."
+  - path: /prometheus/metrics
+    method: GET
+    description: "Prometheus text-format scrape endpoint for live scenario service metrics."
+  - path: /prometheus/query
+    method: GET
+    description: "PromQL-compatible instant query endpoint (standard Prometheus JSON envelope)."
+  - path: /prometheus/query_range
+    method: GET
+    description: "PromQL-compatible range query from TSDB ring buffer (matrix resultType)."
   - path: /
     method: GET
     description: "Health check — returns 200 OK."
