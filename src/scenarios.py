@@ -486,6 +486,8 @@ _SCENARIO_MEDIUM_B = Scenario(
                "Upload failures – 503s from report-service", "2026-03-27T11:20:30Z"),
         _alert("ALT-213", "postgres-reports", AlertSeverity.INFO,
                "Long-running queries detected: 5 queries > 10 s", "2026-03-27T11:18:00Z"),
+        _alert("ALT-214", "health-monitor", AlertSeverity.INFO,
+               "Core services healthy: payment, auth, user-api all nominal. Issue isolated to report-export subsystem.", "2026-03-27T11:20:00Z"),
     ],
     available_services=["report-service", "worker-pool", "s3-upload", "postgres-reports", "redis-cache", "api-gateway"],
     service_logs={
@@ -521,7 +523,8 @@ _SCENARIO_MEDIUM_B = Scenario(
     },
     correct_severity=IncidentSeverity.P2,
     correct_root_cause_service="worker-pool",
-    correct_root_cause_keywords=["memory", "oom", "out of memory", "xlsx", "buffering", "unbounded", "memory leak", "worker memory"],
+    correct_root_cause_keywords=["memory", "oom", "out of memory", "xlsx", "buffering", "unbounded", "memory leak", "worker memory", "worker", "oomkill", "streaming", "row accumulation"],
+    # Note: P2 not P1 — only the report-export subsystem is affected, core services healthy.
     valid_remediation_actions=[
         {"action": "restart", "service": "worker-pool"},
         {"action": "scale", "service": "worker-pool"},
@@ -683,6 +686,8 @@ _SCENARIO_HARD_C = Scenario(
                "Stock deduction failing silently: items over-sold", "2026-03-27T18:12:00Z"),
         _alert("ALT-305", "monitoring-dashboard", AlertSeverity.INFO,
                "DB failover event recorded at 2026-03-27T17:52:00Z", "2026-03-27T18:12:30Z"),
+        _alert("ALT-306", "pgbouncer", AlertSeverity.CRITICAL,
+               "pgbouncer still routing ALL writes to postgres-primary-old (read-only). Connection string not updated after failover.", "2026-03-27T18:13:00Z"),
     ],
     available_services=[
         "order-service", "postgres-primary-old", "postgres-replica-new",
@@ -751,7 +756,7 @@ _SCENARIO_HARD_C = Scenario(
         {"action": "config_change", "service": "order-service"},
         {"action": "restart",       "service": "payment-service"},
     ],
-    expected_escalation_teams=["database-team", "payments-team", "on-call-lead", "platform-team"],
+    expected_escalation_teams=["database-team", "platform-team"],
     max_steps=20,
     degradation_per_step=0.02,
     relevant_services=["pgbouncer", "postgres-primary-old", "postgres-replica-new", "order-service"],
