@@ -19,6 +19,7 @@ Tests:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import Any, Dict, List
@@ -715,11 +716,14 @@ class TestInferenceScript:
 
     @pytest.mark.usefixtures("live_server")
     def test_inference_stdout_has_start_markers(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("HF_TOKEN", "API_KEY")}
+        env["ENV_BASE_URL"] = "http://localhost:7860"
         result = subprocess.run(
             [sys.executable, "inference.py"],
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
         assert "[START]" in result.stdout, "inference.py stdout missing [START] markers"
         assert "[STEP]" in result.stdout, "inference.py stdout missing [STEP] markers"
@@ -727,11 +731,14 @@ class TestInferenceScript:
 
     @pytest.mark.usefixtures("live_server")
     def test_inference_produces_three_episodes(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("HF_TOKEN", "API_KEY")}
+        env["ENV_BASE_URL"] = "http://localhost:7860"
         result = subprocess.run(
             [sys.executable, "inference.py"],
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
         start_count = result.stdout.count("[START]")
         end_count = result.stdout.count("[END]")
@@ -740,11 +747,14 @@ class TestInferenceScript:
 
     @pytest.mark.usefixtures("live_server")
     def test_inference_scores_in_range(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("HF_TOKEN", "API_KEY")}
+        env["ENV_BASE_URL"] = "http://localhost:7860"
         result = subprocess.run(
             [sys.executable, "inference.py"],
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
         for line in result.stdout.splitlines():
             if line.startswith("[END]"):
@@ -756,11 +766,14 @@ class TestInferenceScript:
 
     @pytest.mark.usefixtures("live_server")
     def test_inference_all_done_true(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("HF_TOKEN", "API_KEY")}
+        env["ENV_BASE_URL"] = "http://localhost:7860"
         result = subprocess.run(
             [sys.executable, "inference.py"],
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
         for line in result.stdout.splitlines():
             if line.startswith("[END]"):
