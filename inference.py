@@ -104,32 +104,43 @@ def _info(msg: str) -> None:
 # System prompt for the LLM agent
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
-You are an expert on-call Site Reliability Engineer handling a production incident.
+You are an expert on-call Site Reliability Engineer (SRE) handling a production incident.
+You interact with an Incident Response environment by choosing ONE action per step.
 
-You interact with an Incident Response environment by taking ONE action per step.
-Each action must be a JSON object with these fields:
-  - action_type: one of "classify", "investigate", "diagnose", "remediate", "escalate", "communicate"
-  - target: service name, team name, or channel (depends on action_type)
-  - parameters: dict with action-specific params
-  - reasoning: brief explanation of why you chose this action
+## GRADING (what earns points)
+- INVESTIGATE relevant services before classifying — grader rewards evidence-based decisions
+- CLASSIFY severity AFTER investigation (P1=full outage, P2=degraded, P3=minor, P4=info)
+- DIAGNOSE the correct root-cause service with an accurate description
+- REMEDIATE the correct service with the right action type
+- ESCALATE to the right teams (only when needed — wrong escalation loses points)
+- COMMUNICATE via status_page when incident is resolved
+- STOP as soon as the task objective is met — extra steps reduce your score
 
-Action details:
-  INVESTIGATE: target=service_name → reveals that service's logs and metrics
-  CLASSIFY: parameters.severity = "P1"|"P2"|"P3"|"P4"
-  DIAGNOSE: target=service_name, parameters.root_cause = "description"
-  REMEDIATE: target=service_name, parameters.action = "restart"|"rollback"|"scale"|"config_change"
-  ESCALATE: target=team_name, parameters.priority = "urgent"|"high"|"medium", parameters.message = "..."
-  COMMUNICATE: target="status_page"|"slack"|"email", parameters.message = "status update text"
+## OPTIMAL STRATEGY BY TASK
+- severity_classification: investigate 1-2 services → classify → STOP
+- root_cause_analysis: investigate 1-2 services → classify → diagnose root cause service → remediate → STOP
+- full_incident_management: investigate key services → classify → diagnose → remediate → escalate → communicate → STOP
 
-Strategy:
-1. Read alerts carefully
-2. Investigate the most suspicious services first
-3. Classify severity based on evidence
-4. Diagnose root cause after investigation
-5. Apply targeted remediation
-6. Escalate and communicate as needed
+## ACTION FORMAT (return ONLY this JSON, no markdown fences)
+{
+  "action_type": "investigate" | "classify" | "diagnose" | "remediate" | "escalate" | "communicate",
+  "target": "<service_name or team or channel>",
+  "parameters": {
+    "severity": "P1|P2|P3|P4",           (classify only)
+    "root_cause": "<description>",         (diagnose only)
+    "action": "restart|rollback|scale|config_change",  (remediate only)
+    "priority": "urgent|high|medium",      (escalate only)
+    "message": "<text>"                    (escalate/communicate only)
+  },
+  "reasoning": "<brief evidence-based explanation>"
+}
 
-Return ONLY valid JSON — no markdown, no explanation outside the JSON.
+## CRITICAL RULES
+- Do NOT classify before investigating at least 1 service
+- Do NOT diagnose a service you have not investigated
+- Do NOT repeat remediation on the same service
+- Do NOT escalate or communicate before diagnosing root cause
+- Once done=true is received, the episode ends — do not send more actions
 """
 
 # ---------------------------------------------------------------------------
@@ -317,10 +328,31 @@ def run_episode_llm(task_id: str, env_url: str) -> Dict[str, Any]:
         history_turns = messages[1:][-4:]
         context = [messages[0]] + history_turns
 
+        step_num = trimmed_obs.get("step_number", steps)
+        remaining = max_steps - step_num
+
+        # Format alerts as readable bullet list instead of raw JSON
+        alerts = trimmed_obs.pop("alerts", [])
+        alert_lines = "\n".join(
+            f"  [{a.get('severity','?').upper()}] {a.get('service','?')}: {a.get('message','')}"
+            for a in (alerts if isinstance(alerts, list) else [])
+        ) or "  (none)"
+
+        obs_summary = json.dumps(trimmed_obs, indent=2, default=str)
+
+        urgency = ""
+        if remaining <= 3:
+            urgency = (
+                f"\n\n⚠️  ONLY {remaining} STEPS REMAINING. "
+                "Wrap up: diagnose if not done, then remediate. Skip escalate/communicate unless required."
+            )
+
         user_msg = (
-            f"Current observation (step {trimmed_obs.get('step_number', steps)}/{max_steps}):\n"
-            f"{json.dumps(trimmed_obs, indent=2, default=str)}\n\n"
-            "What is your next action? Return ONLY a JSON object."
+            f"Step {step_num}/{max_steps} — {remaining} steps remaining.\n\n"
+            f"ALERTS:\n{alert_lines}\n\n"
+            f"OBSERVATION:\n{obs_summary}"
+            f"{urgency}\n\n"
+            "Choose your next action. Return ONLY a JSON object, no markdown."
         )
         context.append({"role": "user", "content": user_msg})
         messages.append({"role": "user", "content": user_msg})
