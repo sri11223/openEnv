@@ -14,6 +14,7 @@ tags:
 
 # Incident Response Triage — OpenEnv Environment
 
+> **Live Space:** https://srikrishna2005-openenv.hf.space  
 > **Domain:** Site Reliability Engineering / On-Call Incident Management  
 > **Difficulty:** Easy → Medium → Hard  
 > **Framework:** FastAPI + Pydantic v2  
@@ -199,6 +200,25 @@ Each observation includes:
 
 ## Setup & Usage
 
+**Live HF Space (no setup needed):**
+```
+https://srikrishna2005-openenv.hf.space
+```
+All endpoints are live. No token needed for read-only calls.
+
+### Running inference against the live space
+
+```bash
+# Rule-based baseline (no token needed)
+python inference.py
+# → ENV_BASE_URL defaults to https://srikrishna2005-openenv.hf.space
+
+# LLM mode (set your HF token)
+export HF_TOKEN=hf_...            # required for LLM inference
+export MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct   # optional override
+python inference.py
+```
+
 ### Local Development
 
 ```bash
@@ -209,28 +229,16 @@ pip install -r requirements.txt
 python app.py
 # → http://localhost:7860
 
+# Run against local server
+export ENV_BASE_URL=http://localhost:7860
+python inference.py
+
 # Run tests
 pip install pytest
 pytest tests/ -v
 
 # Run validation
 python validate.py
-
-# Run inference script (root-level, competition-compliant)
-python inference.py
-# → Uses rules baseline by default; set HF_TOKEN + API_BASE_URL + MODEL_NAME for LLM mode
-
-# Run baseline module (alternative)
-python -m baseline.inference --mode rules --direct
-
-# Run baseline (against running server)
-python -m baseline.inference --mode rules --base-url http://localhost:7860
-
-# Run LLM baseline
-export HF_TOKEN=hf_...            # or OPENAI_API_KEY=sk-...
-export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
-python inference.py
 ```
 
 ### Docker
@@ -282,19 +290,20 @@ curl https://<your-username>-incident-response-triage.hf.space/
 > **Session flow:** `/reset` returns a `session_id`. Pass it as the `X-Session-ID` HTTP header on all subsequent `/step`, `/state`, `/grader`, and `/render` calls. This enables safe concurrent multi-agent evaluation.
 
 ```bash
-# 1. Start episode
-SESSION=$(curl -s -X POST http://localhost:7860/reset \
+# 1. Start episode (against live space)
+BASE=https://srikrishna2005-openenv.hf.space
+SESSION=$(curl -s -X POST $BASE/reset \
   -H 'Content-Type: application/json' \
   -d '{"task_id": "severity_classification"}' | python -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
 
 # 2. Take a step
-curl -X POST http://localhost:7860/step \
+curl -X POST $BASE/step \
   -H 'Content-Type: application/json' \
   -H "X-Session-ID: $SESSION" \
   -d '{"action_type": "investigate", "target": "postgres-primary", "parameters": {}, "reasoning": "check connection pool"}'
 
 # 3. Grade the episode
-curl -X POST http://localhost:7860/grader -H "X-Session-ID: $SESSION"
+curl -X POST $BASE/grader -H "X-Session-ID: $SESSION"
 ```
 
 ---
