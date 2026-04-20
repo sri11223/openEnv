@@ -9,3 +9,11 @@ build/
 .env
 *.log
 .qodo/
+
+# ── Local strategy / reference docs — never push ──
+winner_analysis/
+SENTINEL_MASTER_PLAN.md
+SENTINEL_ARCHITECTURE.md
+practice_reward_template.py
+*.pdf
+*.txt
