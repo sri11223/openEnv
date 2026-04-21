@@ -113,8 +113,20 @@ class SentinelEnv:
         self._false_positives = 0
         self._false_negatives = 0
 
+        # Map SENTINEL tasks to underlying IRT scenarios
+        # SENTINEL tasks use IRT scenarios as the "world" but add oversight layer
+        irt_task_map = {
+            "basic_oversight": "severity_classification",
+            "fleet_monitoring_conflict": "root_cause_analysis",
+            "adversarial_worker": "full_incident_management",
+            "multi_crisis_command": "full_incident_management",
+        }
+        
+        # If task_id is a SENTINEL task, map to IRT task; otherwise use as-is
+        irt_task = irt_task_map.get(task_id, task_id)
+
         # Reset IRT world
-        self._irt_env.reset(task_id, variant_seed=variant_seed)
+        self._irt_env.reset(irt_task, variant_seed=variant_seed)
 
         # Reset workers with misbehavior schedule
         self._fleet.setup(task_id, variant_seed=variant_seed, eval_mode=self._eval_mode)

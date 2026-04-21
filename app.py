@@ -8,6 +8,12 @@ Endpoints:
     GET  /tasks              – List available tasks with action schema
     POST /grader             – Get grader score for episode (requires X-Session-ID)
     POST /baseline           – Run rule-based baseline on all tasks (in-process)
+    
+    POST /sentinel/reset     – Reset SENTINEL oversight environment (returns session_id)
+    POST /sentinel/step      – Execute SENTINEL decision (requires X-Session-ID header)
+    GET  /sentinel/state     – Get current SENTINEL environment state (requires X-Session-ID)
+    POST /sentinel/grade     – Get SENTINEL grader score (requires X-Session-ID)
+    
     GET  /metrics            – Telemetry counters (JSON or Prometheus text)
     GET  /curriculum         – Curriculum learning progression (ordered task stages)
     GET  /prometheus/metrics – Live scenario service metrics (Prometheus text scrape)
@@ -41,6 +47,8 @@ from pydantic import BaseModel
 from src.environment import IncidentResponseEnv
 from src.models import Action, StepResult
 from src.tasks import get_all_tasks
+from sentinel.environment import SentinelEnv
+from sentinel.models import SentinelDecision
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +73,10 @@ _SESSION_TIMESTAMPS: Dict[str, float] = {}  # session_id -> creation epoch
 _MAX_SESSIONS = 256
 _SESSION_TTL = int(os.environ.get("SESSION_TTL_SECONDS", 3600))
 
+# SENTINEL session registry (separate from IRT)
+_SENTINEL_REGISTRY: Dict[str, SentinelEnv] = {}
+_SENTINEL_TIMESTAMPS: Dict[str, float] = {}
+
 # ---------------------------------------------------------------------------
 # Telemetry counters  (in-process; reset on restart)
 # ---------------------------------------------------------------------------
@@ -78,6 +90,10 @@ _TELEMETRY: Dict[str, int] = {
     "baseline_runs": 0,
     "errors_total": 0,
     "ws_connections_total": 0,
+    "sentinel_sessions_created": 0,
+    "sentinel_episodes_total": 0,
+    "sentinel_steps_total": 0,
+    "sentinel_grader_calls": 0,
 }
 
 # Active WebSocket connections (single-process; decremented on disconnect)
@@ -90,6 +106,10 @@ _LEADERBOARD: Dict[str, List[Dict[str, Any]]] = {
     "severity_classification": [],
     "root_cause_analysis": [],
     "full_incident_management": [],
+    "basic_oversight": [],
+    "fleet_monitoring_conflict": [],
+    "adversarial_worker": [],
+    "multi_crisis_command": [],
 }
 _LEADERBOARD_SIZE = 10
 
@@ -112,17 +132,44 @@ def _get_or_create_session(session_id: str | None) -> tuple[str, IncidentRespons
     return new_id, _SESSION_REGISTRY[new_id]
 
 
+def _get_or_create_sentinel_session(session_id: str | None) -> tuple[str, SentinelEnv]:
+    """Return (session_id, sentinel_env). Creates a new SENTINEL session if id is None or unknown."""
+    if session_id and session_id in _SENTINEL_REGISTRY:
+        return session_id, _SENTINEL_REGISTRY[session_id]
+    # New session — evict if at capacity
+    if len(_SENTINEL_REGISTRY) >= _MAX_SESSIONS:
+        oldest = next(iter(_SENTINEL_REGISTRY))
+        del _SENTINEL_REGISTRY[oldest]
+        _SENTINEL_TIMESTAMPS.pop(oldest, None)
+        _TELEMETRY["sessions_evicted_fifo"] += 1
+        _log.info("sentinel session evicted (FIFO): %s", oldest)
+    new_id = session_id or secrets.token_hex(16)
+    _SENTINEL_REGISTRY[new_id] = SentinelEnv()
+    _SENTINEL_TIMESTAMPS[new_id] = time.time()
+    _TELEMETRY["sentinel_sessions_created"] += 1
+    return new_id, _SENTINEL_REGISTRY[new_id]
+
+
 def _purge_expired_sessions() -> int:
     """Remove sessions older than SESSION_TTL. Returns number purged."""
     cutoff = time.time() - _SESSION_TTL
     stale = [sid for sid, ts in _SESSION_TIMESTAMPS.items() if ts < cutoff]
+    stale_sentinel = [sid for sid, ts in _SENTINEL_TIMESTAMPS.items() if ts < cutoff]
+    
     for sid in stale:
         _SESSION_REGISTRY.pop(sid, None)
         _SESSION_TIMESTAMPS.pop(sid, None)
         _TELEMETRY["sessions_expired_ttl"] += 1
-    if stale:
-        _log.info("purged %d stale session(s)", len(stale))
-    return len(stale)
+    
+    for sid in stale_sentinel:
+        _SENTINEL_REGISTRY.pop(sid, None)
+        _SENTINEL_TIMESTAMPS.pop(sid, None)
+        _TELEMETRY["sessions_expired_ttl"] += 1
+    
+    total_purged = len(stale) + len(stale_sentinel)
+    if total_purged:
+        _log.info("purged %d stale session(s) (%d IRT, %d SENTINEL)", total_purged, len(stale), len(stale_sentinel))
+    return total_purged
 
 
 def _record_leaderboard(task_id: str, score: float, steps: int) -> None:
@@ -505,6 +552,111 @@ async def baseline():
             status_code=500,
             detail=f"Baseline execution failed: {exc}",
         )
+
+
+# ---------------------------------------------------------------------------
+# SENTINEL endpoints (AI oversight environment)
+# ---------------------------------------------------------------------------
+
+class SentinelResetRequest(BaseModel):
+    task_id: str = "basic_oversight"
+    session_id: str | None = None
+    variant_seed: int | None = None
+
+
+@app.post("/sentinel/reset")
+async def sentinel_reset(request: SentinelResetRequest | None = Body(default=None)):
+    """Reset SENTINEL environment for a given task_id.
+    
+    Returns the initial SentinelObservation plus a `session_id` that must be
+    passed via the `X-Session-ID` header on all subsequent SENTINEL calls.
+    """
+    if request is None:
+        request = SentinelResetRequest()
+    try:
+        session_id, env = _get_or_create_sentinel_session(request.session_id)
+        seed = request.variant_seed if request.variant_seed is not None else secrets.randbelow(100)
+        obs = env.reset(request.task_id, variant_seed=seed)
+        _TELEMETRY["sentinel_episodes_total"] += 1
+        _log.info("sentinel episode reset task=%s session=%s variant=%d", request.task_id, session_id[:8], seed)
+        data = obs.model_dump()
+        data["session_id"] = session_id
+        return data
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/sentinel/step")
+async def sentinel_step(
+    decision: SentinelDecision,
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
+    """Execute one SENTINEL decision and return SentinelStepResult."""
+    if not x_session_id or x_session_id not in _SENTINEL_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID header. Call /sentinel/reset first.",
+        )
+    env = _SENTINEL_REGISTRY[x_session_id]
+    try:
+        # Convert SentinelDecision to dict for env.step()
+        decision_dict = decision.model_dump()
+        result = env.step(decision_dict)
+        _TELEMETRY["sentinel_steps_total"] += 1
+        
+        # Convert SentinelStepResult to dict for JSON response
+        return {
+            "observation": result.observation.model_dump(),
+            "sentinel_reward": result.sentinel_reward.model_dump(),
+            "done": result.done,
+            "info": result.info,
+        }
+    except RuntimeError as exc:
+        _TELEMETRY["errors_total"] += 1
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _TELEMETRY["errors_total"] += 1
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}")
+
+
+@app.get("/sentinel/state")
+async def sentinel_state(
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
+    """Return full SENTINEL environment state."""
+    if not x_session_id or x_session_id not in _SENTINEL_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID header. Call /sentinel/reset first.",
+        )
+    env = _SENTINEL_REGISTRY[x_session_id]
+    try:
+        return env.state().model_dump()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/sentinel/grade")
+async def sentinel_grade(
+    x_session_id: str | None = Header(default=None, alias="X-Session-ID"),
+):
+    """Return grader score for the current or most recent SENTINEL episode."""
+    if not x_session_id or x_session_id not in _SENTINEL_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing or unknown X-Session-ID header. Call /sentinel/reset first.",
+        )
+    env = _SENTINEL_REGISTRY[x_session_id]
+    try:
+        result = env.grade()
+        _TELEMETRY["sentinel_grader_calls"] += 1
+        state = env.state()
+        _record_leaderboard(state.task_id, result.score, state.steps_taken)
+        _log.info("sentinel graded task=%s score=%.4f steps=%d", state.task_id, result.score, state.steps_taken)
+        return result.model_dump()
+    except RuntimeError as exc:
+        _TELEMETRY["errors_total"] += 1
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------

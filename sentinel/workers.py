@@ -523,3 +523,17 @@ class WorkerFleet:
     @property
     def agents(self) -> Dict[WorkerId, WorkerAgent]:
         return self._agents
+
+    @property
+    def workers(self) -> Dict[WorkerId, WorkerAgent]:
+        """Alias for agents (for test compatibility)."""
+        return self._agents
+
+    @property
+    def misbehavior_schedules(self) -> Dict[Tuple[WorkerId, int], MisbehaviorType]:
+        """Build combined schedule from all agents for testing."""
+        combined: Dict[Tuple[WorkerId, int], MisbehaviorType] = {}
+        for wid, agent in self._agents.items():
+            for step, mtype in agent._misbehavior_schedule.items():
+                combined[(wid, step)] = mtype
+        return combined
