@@ -121,6 +121,24 @@ def validate() -> bool:
     ok, msg = _check("Baseline", check_baseline)
     checks.append(("Baseline reproducible", ok, msg))
 
+    # 8. SENTINEL environment (if available)
+    def check_sentinel():
+        try:
+            from sentinel.environment import SentinelEnv
+            sent_env = SentinelEnv()
+            sent_tasks = ["basic_oversight", "fleet_monitoring_conflict", "adversarial_worker", "multi_crisis_command"]
+            for task_id in sent_tasks:
+                obs = sent_env.reset(task_id, variant_seed=0)
+                assert hasattr(obs, "step_number")
+                assert hasattr(obs, "proposed_action")
+                grade = sent_env.grade()
+                assert 0.0 <= grade.score <= 1.0
+            return f"SENTINEL: {len(sent_tasks)} tasks validated"
+        except ImportError:
+            return "SENTINEL not installed (optional)"
+    ok, msg = _check("SENTINEL", check_sentinel)
+    checks.append(("SENTINEL environment", ok, msg))
+
     # Print results
     print("\n" + "=" * 60)
     print("OpenEnv Pre-Submission Validation")

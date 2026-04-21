@@ -554,11 +554,15 @@ def train():
 
     # Load curriculum and agent memory
     from training.curriculum import get_curriculum
-    from training.memory import load_agent_memory, build_memory_context, maybe_consolidate_memory
+    from training.memory import (
+        load_agent_memory, build_memory_context, maybe_consolidate_memory,
+        record_episode as mem_record_episode, save_agent_memory,
+    )
 
     curriculum = get_curriculum() if USE_CURRICULUM else None
     memory     = load_agent_memory()
     memory_ctx = build_memory_context(memory)
+    _mem_counter = [0]   # mutable counter accessible in closure
 
     # Build dataset
     dataset = build_grpo_dataset(ACTIVE_TASK_IDS, max_seeds=5, memory_context=memory_ctx)
@@ -603,17 +607,48 @@ def train():
             **{k: v for k, v in kwargs.items() if k not in ("task_id", "variant_seed")},
         )
 
-        # Record in curriculum
+        # Record in curriculum AND memory
         if curriculum:
             for i, r in enumerate(rewards):
                 t_id = t_ids[i] if i < len(t_ids) else TASK_IDS[0]
                 seed = v_seeds[i] if i < len(v_seeds) else 0
                 curriculum.record_episode(t_id, seed, score=r, steps=10)
+                
+                # Record in memory for cross-episode learning
+                episode_data = {
+                    "task_id": t_id,
+                    "score": r,
+                    "steps": 10,
+                    "trajectory_summary": f"GRPO episode on {t_id}",
+                    "mistakes": [] if r >= 0.70 else ["Low score - need better oversight"],
+                    "successes": ["Good oversight decisions"] if r >= 0.70 else [],
+                }
+                nonlocal memory
+                memory = mem_record_episode(memory, episode_data)
+                _mem_counter[0] += 1
+                
+                # Save memory every 10 episodes
+                if _mem_counter[0] % 10 == 0:
+                    save_agent_memory(memory)
+                    memory = maybe_consolidate_memory(memory, GROQ_API_KEY if USE_LLM_PANEL else None)
 
+            # Adversarial designer trigger
             if USE_CURRICULUM and curriculum.should_use_adversarial():
-                logger.info("Adversarial trigger: tier=%d mean=%.2f",
+                logger.info("🔥 Adversarial trigger: tier=%d mean=%.2f",
                             curriculum.tier_index,
                             curriculum.summary()["recent_mean_score"])
+                
+                # Generate harder worker scenarios
+                try:
+                    if GROQ_API_KEY:
+                        from training.adversarial import AdversarialDesigner
+                        designer = AdversarialDesigner(api_key=GROQ_API_KEY)
+                        weak_spots = curriculum.weak_spots(top_n=2)
+                        new_scenarios = designer.generate(weak_spots, n=3)
+                        designer.save_generated("outputs/adversarial_scenarios.json")
+                        logger.info("✅ Generated %d adversarial scenarios", len(new_scenarios))
+                except Exception as e:
+                    logger.debug("Adversarial generation failed: %s", e)
 
         return rewards
 
