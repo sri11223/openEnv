@@ -12,7 +12,9 @@ tags:
   - incident-response
 ---
 
-# Incident Response Triage — OpenEnv Environment
+# Incident Response Triage + SENTINEL Oversight - OpenEnv Environment
+
+> **Grand Finale upgrade:** this repo now includes **SENTINEL**, a multi-agent AI oversight environment for the Meta PyTorch OpenEnv Hackathon finale. SENTINEL trains an AI commander to supervise worker agents before their proposed actions execute. See [`README_SENTINEL.md`](README_SENTINEL.md) and [`HACKATHON_FIRST_PRIZE_READINESS.md`](HACKATHON_FIRST_PRIZE_READINESS.md).
 
 > **Live Space:** https://srikrishna2005-openenv.hf.space  
 > **Domain:** Site Reliability Engineering / On-Call Incident Management  
@@ -26,7 +28,7 @@ tags:
 <td><strong>Baseline Score</strong></td><td>0.99 / 0.99 / 0.93 (mean 0.97)</td>
 </tr>
 <tr>
-<td><strong>Tasks</strong></td><td>3 (Easy, Medium, Hard)</td>
+<td><strong>Tasks</strong></td><td>7 total: 3 IRT + 4 SENTINEL oversight tasks</td>
 </tr>
 <tr>
 <td><strong>Scenarios</strong></td><td>7 variants across 3 difficulty levels</td>
@@ -35,7 +37,7 @@ tags:
 <td><strong>Reward Components</strong></td><td>12 (dense, per-step)</td>
 </tr>
 <tr>
-<td><strong>Unit Tests</strong></td><td>145 / 145 passing</td>
+<td><strong>Unit Tests</strong></td><td>190 / 190 passing</td>
 </tr>
 <tr>
 <td><strong>Validation Checks</strong></td><td>7 / 7 passing</td>
@@ -286,6 +288,9 @@ curl https://<your-username>-incident-response-triage.hf.space/
 | `GET` | `/prometheus/query` | opt. `X-Session-ID` | PromQL instant query (standard Prometheus JSON envelope) |
 | `GET` | `/prometheus/query_range` | opt. `X-Session-ID` | PromQL range query — matrix result from TSDB ring buffer |
 | `GET` | `/web` | — | Interactive browser-based incident dashboard (WebSocket-backed) |
+| `GET` | `/sentinel/dashboard` | — | Interactive SENTINEL fleet oversight dashboard |
+| `POST` | `/sentinel/intercept` | — | Score an arbitrary worker proposal before execution |
+| `GET` | `/sentinel/stream` | `session_id` query | Server-sent events for live SENTINEL state |
 
 > **Session flow:** `/reset` returns a `session_id`. Pass it as the `X-Session-ID` HTTP header on all subsequent `/step`, `/state`, `/grader`, and `/render` calls. This enables safe concurrent multi-agent evaluation.
 
@@ -751,4 +756,3 @@ Several design choices directly prevent the agent from exploiting the reward fun
 ## License
 
 MIT
-

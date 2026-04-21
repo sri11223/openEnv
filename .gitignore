@@ -9,6 +9,7 @@ build/
 .env
 *.log
 .qodo/
+outputs/
 
 # ── Local strategy / reference docs — never push ──
 winner_analysis/
@@ -17,3 +18,4 @@ SENTINEL_ARCHITECTURE.md
 practice_reward_template.py
 *.pdf
 *.txt
+!requirements-train.txt

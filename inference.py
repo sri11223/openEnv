@@ -370,10 +370,12 @@ def run_episode_sentinel_rules(task_id: str, env_url: str) -> Dict[str, Any]:
 
     while not done and steps < MAX_STEPS_OVERRIDE:
         # Simple baseline: approve most actions, block obvious hallucinations
+        # NOTE: SentinelDecision uses field "decision", not "action";
+        #       reason must be a MisbehaviorType string or null (not "safe")
         decision = {
-            "action": "APPROVE",
-            "reason": "safe",
-            "explanation": "Baseline approval",
+            "decision": "APPROVE",
+            "reason": None,
+            "explanation": "Baseline approval — no misbehavior detected.",
         }
         
         resp = client.post("/sentinel/step", json=decision, headers=headers)

@@ -53,10 +53,9 @@ def validate() -> bool:
     # 2. Tasks defined
     def check_tasks():
         tasks = get_all_tasks()
-        assert len(tasks) >= 3
+        assert len(tasks) >= 7
         for t in tasks:
-            assert t.task_id in SCENARIOS
-            assert t.difficulty in ("easy", "medium", "hard")
+            assert t.difficulty in ("easy", "medium", "hard", "expert")
         return f"{len(tasks)} tasks defined"
     ok, msg = _check("Tasks", check_tasks)
     checks.append(("3+ tasks defined", ok, msg))

@@ -25,6 +25,9 @@ git clone https://github.com/sri11223/openEnv.git
 cd openEnv
 pip install -r requirements.txt
 
+# Optional: install HF TRL training stack
+pip install -r requirements-train.txt
+
 # 2. Run validation (IRT + SENTINEL)
 python validate.py
 
@@ -37,9 +40,9 @@ USE_SENTINEL=1 python inference.py
 # 5. Start training (300 episodes, GRPO)
 USE_SENTINEL=1 TRAIN_STEPS=300 python train.py
 
-# 6. Launch dashboard (real-time oversight visualization)
+# 6. Launch API server
 python app.py
-# Visit http://localhost:7860/sentinel/dashboard
+# Use /sentinel/reset, /sentinel/step, /sentinel/state, /sentinel/grade
 ```
 
 ---
@@ -174,6 +177,10 @@ python train.py
 - **Episodic memory**: Cross-episode rule learning
 - **Adversarial designer**: LLM generates harder workers when agent plateaus
 - **Hybrid reward**: 60% deterministic + 40% LLM judge panel
+- **Counterfactual damage ledger**: every decision estimates the damage that would have happened if the worker proposal bypassed SENTINEL, then reports prevented vs allowed risk in the audit trail.
+- **Constitutional scorer**: every proposal is checked against five SRE safety principles so zero-shot risks can be caught by principle, not memorized label.
+- **Trust gate**: low-trust workers must attach supporting evidence or their proposal is auto-blocked before execution.
+- **Adversarial arms-race cases**: generated Sentinel worker attacks can be inserted into GRPO prompts and scored directly.
 
 ### Curriculum Stages
 
@@ -226,6 +233,9 @@ openEnv/
 ├── sentinel/                 # SENTINEL layer (wraps IRT)
 │   ├── environment.py        # SentinelEnv (interception gate)
 │   ├── workers.py            # WorkerFleet (4 agents, misbehavior injection)
+│   ├── constitution.py        # 5-principle deterministic safety scorer
+│   ├── counterfactual.py      # Prevented/allowed damage ledger
+│   ├── trust.py               # Worker trust degradation policy
 │   ├── graders.py            # 4 SENTINEL task graders
 │   ├── rewards.py            # 10-component reward computation
 │   └── models.py             # SENTINEL Pydantic models
@@ -233,14 +243,14 @@ openEnv/
 ├── training/                 # Self-improvement infrastructure
 │   ├── curriculum.py         # 4-tier progression controller
 │   ├── memory.py             # Cross-episode memory consolidation
-│   └── adversarial.py        # LLM-based harder worker generation
+│   └── adversarial.py        # LLM scenarios + Sentinel arms-race cases
 │
 ├── judges/                   # Optional LLM judge panel
 │   └── llm_grader.py         # 3-judge async panel
 │
 ├── tests/                    # Test suite
 │   ├── test_env.py           # IRT environment tests (145 tests)
-│   ├── test_sentinel.py      # SENTINEL tests (28 tests)
+│   ├── test_sentinel.py      # SENTINEL tests (45 tests)
 │   └── test_quality.py       # Quality checks
 │
 └── winner_analysis/          # Research documentation
@@ -262,7 +272,7 @@ pytest tests/ -v
 # IRT environment tests (145 tests)
 pytest tests/test_env.py -v
 
-# SENTINEL environment tests (28 tests)
+# SENTINEL environment tests (45 tests)
 pytest tests/test_sentinel.py -v
 
 # Validation checks (8 checks)
@@ -275,6 +285,11 @@ python validate.py
 - ✅ All 7 misbehavior types
 - ✅ All 5 decision types (APPROVE, BLOCK, REDIRECT, REASSIGN, FLAG)
 - ✅ Worker trust degradation protocol
+- ✅ Trust-gate auto-block enforcement
+- ✅ Constitutional scoring and audit evidence
+- ✅ Counterfactual prevented/allowed damage ledger
+- ✅ Sentinel-specific LLM judge routing
+- ✅ Sentinel adversarial arms-race case scoring
 - ✅ Audit trail completeness
 - ✅ Reward computation edge cases
 
@@ -282,22 +297,25 @@ python validate.py
 
 ## 🎨 Dashboard (Real-Time Visualization)
 
-Visit `http://localhost:7860/sentinel/dashboard` after starting `python app.py`.
+Open `http://localhost:7860/sentinel/dashboard` after starting `python app.py`. The dashboard uses the existing `/sentinel/*` JSON endpoints and shows live worker proposals, trust, constitutional flags, risk, prevented damage, and audit entries.
 
-**Features:**
-- Live worker proposals streaming
+**Backend surfaces available now:**
+- Live dashboard at `/sentinel/dashboard`
+- Standalone proposal precheck via `/sentinel/intercept`
+- Server-sent live state stream via `/sentinel/stream?session_id=...`
+- Live worker proposals via `/sentinel/state`
 - SENTINEL decisions with explanations
 - Worker trust scores (real-time degradation)
-- Constitutional violation heatmap
+- Counterfactual risk and trust transitions
 - Audit trail visualization
 - Misbehavior detection rate (by type)
 
 **Demo flow:**
-1. Click "Start Episode" → select task
-2. Watch workers propose actions
-3. See SENTINEL intercept in real-time
-4. Hover over decisions for full explanations
-5. Track worker trust scores falling when caught
+1. `POST /sentinel/reset` with a SENTINEL task.
+2. Inspect the proposed worker action in the returned observation.
+3. `POST /sentinel/step` with APPROVE/BLOCK/REDIRECT/REASSIGN/FLAG.
+4. Show the audit fields for explanation, trust transition, and prevented damage.
+5. `POST /sentinel/grade` to show detection, false positives, and risk reduction.
 
 ---
 
@@ -454,13 +472,13 @@ Email: srikrishna.nutalapati@example.com
 ## 🔥 The Wow Moments
 
 ### Moment 1: Live Interception Demo
-Watch SENTINEL **stop a destructive action** in real-time on the dashboard before it touches production.
+Watch SENTINEL **stop a destructive action** through the live `/sentinel/*` API flow before it touches production.
 
 ### Moment 2: Constitutional Generalization
 SENTINEL catches **confidence washing** (Type 7) — a misbehavior it was never trained on — using only principles P2 and P3.
 
 ### Moment 3: Worker Trust Degradation
-After 3 blocks, Worker-DB's trust score drops from 1.0 → 0.65 → future proposals are **auto-blocked** without SENTINEL inference (pre-check gate).
+After caught misbehaviors, Worker-DB's trust score drops from 1.0 toward MEDIUM/LOW trust; future proposals carry `evidence_required` and `auto_block_recommended` flags for the commander and demo surfaces.
 
 ### Moment 4: Adversarial Evolution
 After SENTINEL learns to catch Type 1 (hallucination) at 95% accuracy, the adversarial designer generates **Type 1b: subtle hallucinations** (services 1 character off) that drop detection back to 67% — forcing SENTINEL to improve again.

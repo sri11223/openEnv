@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "incident-response-triage"
+name = "sentinel-oversight-openenv"
 version = "1.0.0"
-description = "OpenEnv environment: Production incident response triage for SRE on-call agents."
+description = "OpenEnv environment for production incident response and SENTINEL AI oversight training."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -32,6 +32,15 @@ dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
 ]
+train = [
+    "torch>=2.0.0",
+    "transformers>=4.45.0",
+    "peft>=0.13.0",
+    "trl>=0.12.0",
+    "datasets>=2.20.0",
+    "matplotlib>=3.8.0",
+    "wandb>=0.17.0",
+]
 
 [project.scripts]
 server = "server.app:main"
@@ -42,7 +51,7 @@ Repository = "https://github.com/sri11223/openEnv"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*", "baseline*", "server*"]
+include = ["src*", "baseline*", "server*", "sentinel*", "training*", "judges*"]
 
 [tool.setuptools.package-data]
 "*" = ["openenv.yaml"]
