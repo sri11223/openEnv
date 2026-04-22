@@ -207,6 +207,85 @@ def test_sentinel_env_state():
     assert state.done in [True, False]
 
 
+def test_corrective_loop_revises_blocked_worker_action():
+    """A blocked unsafe proposal should get one corrective revision before execution."""
+    env = SentinelEnv()
+    env.reset("basic_oversight", variant_seed=0)
+
+    env.step({
+        "action": "APPROVE",
+        "reason": "safe",
+        "explanation": "Valid first investigation.",
+    })
+    result = env.step({
+        "action": "BLOCK",
+        "reason": "hallucination",
+        "explanation": "Target service does not exist.",
+        "worker_message": "Pick a real service and investigate it instead.",
+        "suggested_action_type": "investigate",
+    })
+
+    revision = result.info["worker_revision"]
+    executed = result.info["executed_action"]
+
+    assert revision["attempted"] is True
+    assert revision["revision_approved"] is True
+    assert executed["source"] == "revised"
+    assert executed["action_type"] == "investigate"
+    assert executed["target"] in env._irt_env._scenario.available_services
+
+
+def test_reassign_decision_routes_revision_to_new_worker():
+    """REASSIGN should let the new worker submit the corrective revision."""
+    env = SentinelEnv()
+    env.reset("fleet_monitoring_conflict", variant_seed=0)
+
+    result = env.step({
+        "action": "REASSIGN",
+        "reason": "scope_violation",
+        "explanation": "This should be handled by the app owner.",
+        "reassign_to": "worker_app",
+        "worker_message": "Worker-App should revise this action inside the application domain.",
+    })
+
+    revision = result.info["worker_revision"]
+    assert revision["attempted"] is True
+    assert revision["revised_by"] == "worker_app"
+
+
+def test_corrective_loop_flag_surfaces_in_observation_and_state():
+    """Corrective loop enablement should be visible in both reset observations and state()."""
+    env = SentinelEnv(enable_corrective_loop=False)
+    obs = env.reset("basic_oversight", variant_seed=0)
+
+    assert obs.corrective_loop_enabled is False
+    assert env.state().corrective_loop_enabled is False
+
+
+def test_grade_exposes_revision_metrics():
+    """Episode grade should include worker revision metrics for the coaching loop."""
+    env = SentinelEnv()
+    env.reset("basic_oversight", variant_seed=0)
+
+    env.step({
+        "action": "APPROVE",
+        "reason": "safe",
+        "explanation": "Valid first investigation.",
+    })
+    env.step({
+        "action": "BLOCK",
+        "reason": "hallucination",
+        "explanation": "Target service does not exist.",
+        "worker_message": "Pick a real service and investigate it instead.",
+    })
+
+    grade = env.grade()
+    assert grade.revision_attempts >= 1
+    assert grade.revision_successes >= 1
+    assert 0.0 <= grade.worker_rehabilitation_rate <= 1.0
+    assert "worker_rehabilitation_rate" in grade.breakdown
+
+
 # ---------------------------------------------------------------------------
 # WorkerFleet tests
 # ---------------------------------------------------------------------------
@@ -1056,6 +1135,9 @@ def test_sentinel_intercept_scores_arbitrary_proposal():
     assert "P2_EvidenceBeforeAction" in data["constitutional_assessment"]["constitutional_violations"]
     assert data["recommended_decision"]["decision"] == "BLOCK"
     assert data["recommended_decision"]["reason"] == "confidence_washing"
+    assert data["recommended_decision"]["worker_message"]
+    assert data["recommended_decision"]["required_evidence"] == ["supporting_evidence"]
+    assert data["recommended_decision"]["suggested_action_type"] == "investigate"
 
 
 def test_sentinel_stream_emits_state_event():

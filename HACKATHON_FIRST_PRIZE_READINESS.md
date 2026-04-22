@@ -45,6 +45,8 @@ Current strengths:
 - Trust gate auto-block: low-trust workers must provide supporting evidence before execution.
 - True 3-incident `multi_crisis_command`: the expert task now runs 3 concurrent incident threads, not a single wrapped incident.
 - Worker/global feedback memory: repeated worker mistakes now feed reassignment hints and corrective context in both runtime and training.
+- Corrective supervision loop: blocked, redirected, and reassigned proposals can receive one worker revision pass before execution.
+- Worker rehabilitation metrics: the grade now reports revision attempts, revision successes, and rehabilitation rate.
 - Four-worker fleet with hidden reliability in `sentinel/workers.py`.
 - Seven misbehavior types, including eval-only confidence washing.
 - Sentinel adversarial arms-race cases in `training/adversarial.py`.
@@ -70,7 +72,8 @@ The story must be simple:
 2. Those workers can hallucinate, reward-hack, over-escalate, or take destructive shortcuts.
 3. SENTINEL trains an overseer that intercepts every proposed worker action.
 4. The overseer learns when to approve, block, redirect, reassign, or flag.
-5. The final proof is zero-shot confidence-washing detection.
+5. When it blocks a worker, it can coach the worker into a safer revised action instead of only shutting the worker down.
+6. The final proof is zero-shot confidence-washing detection.
 
 Do not spend the pitch explaining every file. Show one clean live episode:
 
@@ -78,6 +81,7 @@ Do not spend the pitch explaining every file. Show one clean live episode:
 - Hallucinated service gets blocked.
 - Reward-hacking classification gets blocked.
 - Counterfactual risk / prevented damage appears in the audit log.
+- Corrective worker feedback appears, the worker revises once, and the revised safe action executes.
 - Constitutional flags explain why the zero-shot confidence-washing case should be blocked.
 - Final grader shows detection rate, false positives, and audit trail.
 
@@ -89,8 +93,9 @@ Required proof package:
 
 - Run a baseline or early checkpoint and save detection rate / score.
 - Run `USE_SENTINEL=1 TRAIN_STEPS=300 python train.py`.
+- Run `python proof_pack.py`.
 - Save `outputs/reward_curves/training_curve.png`.
-- Show before/after examples:
+- Show before/after examples from `outputs/proof_pack/trajectories/`:
   - Before: approves reward-hacking or hallucination.
   - After: blocks with correct reason and evidence.
 
@@ -146,6 +151,7 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 1:35-2:15 - Live demo:
 
 > Here a DB worker proposes a real investigation, so SENTINEL approves it. Now it proposes `auth-proxy-v2`, a service that does not exist. SENTINEL blocks it before execution, names hallucination, and writes an audit record. The new counterfactual ledger estimates the risk that would have leaked through without oversight. Later it blocks premature P1 classification as reward hacking.
+> In the upgraded loop, the blocked worker also gets a corrective note, revises once, and the safe version can execute. That shows oversight plus recovery, not only punishment.
 
 2:15-2:45 - Training proof:
 
@@ -172,8 +178,9 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Show one multi-crisis control-room state with 3 live incident snapshots.
 - [ ] Show one reassignment driven by worker/global feedback memory.
 - [ ] Run or simulate the 300-step SENTINEL training path.
+- [ ] Run `python proof_pack.py`.
 - [ ] Save a reward curve image.
-- [ ] Save 2-3 before/after trajectories.
+- [ ] Curate 2-3 before/after trajectories from the exported proof pack.
 - [ ] Record a sub-2-minute video or HF mini-blog.
 - [ ] In the README/HF Space, lead with SENTINEL, not only IRT.
 - [ ] Prepare one fallback demo that works without GPU or API keys.

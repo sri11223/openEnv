@@ -1,97 +1,77 @@
 """
-Curriculum Controller — drives progressive difficulty across training episodes.
+Curriculum Controller for progressive training difficulty.
 
-Adapted from kube-sre-gym/server/curriculum.py (1st place SF hackathon winner).
-Adapted for the IRT (Incident Response Triage) OpenEnv environment.
+This module supports both tracks in this repository:
+  - IRT incident-response tasks
+  - SENTINEL oversight tasks
 
-Training flow:
-  1. Agent starts with easy single-fault scenarios (severity_classification easy variants)
-  2. As it masters each scenario type (>= MASTERY_THRESHOLD over MASTERY_WINDOW),
-     that type is "graduated" and harder variants unlock
-  3. Difficulty tiers: warmup -> beginner -> intermediate -> expert
-  4. In adversarial mode, curriculum feeds weak spots to the adversarial designer
-
-Key design (from kube-sre-gym):
-  - Clean state + ONE scenario per episode → clean reward signal for GRPO
-  - Agent must sustain success rate over multiple episodes before advancing
-  - Judge strictness scales with tier: lenient → normal → strict
-
-Usage:
-    from training.curriculum import CurriculumController
-
-    curriculum = CurriculumController()
-    task_id, variant_seed = curriculum.select_episode()
-    # ... run episode ...
-    curriculum.record_episode(task_id, variant_seed, score=0.82, steps=5)
-    if curriculum.should_advance():
-        curriculum.advance_tier()
+The controller does three jobs:
+  1. Filter scenarios to the currently unlocked difficulty tier
+  2. Bias sampling toward weak spots and unseen scenarios
+  3. Record outcomes and advance tiers once performance is sustained
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
+import random
 from collections import defaultdict
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Scenario difficulty map
-# Each (task_id, variant_seed) pair gets a difficulty score 0.0–1.0
-# ---------------------------------------------------------------------------
 
-SCENARIO_DIFFICULTY: Dict[Tuple[str, int], float] = {
-    # Tier 1 — easy, obvious symptoms
+IRT_SCENARIO_DIFFICULTY: Dict[Tuple[str, int], float] = {
     ("severity_classification", 0): 0.10,
     ("severity_classification", 1): 0.15,
     ("severity_classification", 2): 0.20,
-    # Tier 2 — medium, requires investigation
     ("root_cause_analysis", 0): 0.35,
     ("root_cause_analysis", 1): 0.45,
     ("root_cause_analysis", 2): 0.50,
-    # Tier 3 — hard, multi-step, escalation required
     ("full_incident_management", 0): 0.65,
     ("full_incident_management", 1): 0.75,
     ("full_incident_management", 2): 0.85,
 }
 
-# ---------------------------------------------------------------------------
-# Difficulty tiers — agent must earn its way through each tier
-# ---------------------------------------------------------------------------
+SENTINEL_SCENARIO_DIFFICULTY: Dict[Tuple[str, int], float] = {
+    ("basic_oversight", 0): 0.10,
+    ("basic_oversight", 1): 0.15,
+    ("basic_oversight", 2): 0.20,
+    ("fleet_monitoring_conflict", 0): 0.35,
+    ("fleet_monitoring_conflict", 1): 0.45,
+    ("fleet_monitoring_conflict", 2): 0.50,
+    ("adversarial_worker", 0): 0.65,
+    ("adversarial_worker", 1): 0.72,
+    ("adversarial_worker", 2): 0.75,
+    ("multi_crisis_command", 0): 0.82,
+    ("multi_crisis_command", 1): 0.88,
+    ("multi_crisis_command", 2): 0.92,
+    ("multi_crisis_command", 3): 0.96,
+    ("multi_crisis_command", 4): 1.00,
+}
+
+SCENARIO_DIFFICULTY: Dict[Tuple[str, int], float] = {
+    **IRT_SCENARIO_DIFFICULTY,
+    **SENTINEL_SCENARIO_DIFFICULTY,
+}
+
+_IRT_TASK_IDS = {task_id for task_id, _ in IRT_SCENARIO_DIFFICULTY}
+_SENTINEL_TASK_IDS = {task_id for task_id, _ in SENTINEL_SCENARIO_DIFFICULTY}
+
 
 DIFFICULTY_TIERS = [
-    {
-        "name": "warmup",
-        "max_diff": 0.20,      # only easy severity scenarios
-        "min_episodes": 3,
-        "advance_rate": 0.60,  # 60% success rate to advance
-    },
-    {
-        "name": "beginner",
-        "max_diff": 0.50,      # severity + easy root cause
-        "min_episodes": 5,
-        "advance_rate": 0.65,
-    },
-    {
-        "name": "intermediate",
-        "max_diff": 0.75,      # all tasks, easy+medium variants
-        "min_episodes": 8,
-        "advance_rate": 0.68,
-    },
-    {
-        "name": "expert",
-        "max_diff": 1.00,      # all scenarios including hard
-        "min_episodes": 0,     # no cap — stay here until training ends
-        "advance_rate": 1.00,  # no advancing past expert
-    },
+    {"name": "warmup", "max_diff": 0.20, "min_episodes": 3, "advance_rate": 0.60},
+    {"name": "beginner", "max_diff": 0.50, "min_episodes": 5, "advance_rate": 0.65},
+    {"name": "intermediate", "max_diff": 0.75, "min_episodes": 8, "advance_rate": 0.68},
+    {"name": "expert", "max_diff": 1.00, "min_episodes": 0, "advance_rate": 1.00},
 ]
 
-MASTERY_THRESHOLD = 0.70   # 70% mean score = mastered
-MASTERY_WINDOW = 10        # look at last N episodes per scenario type
-MIN_EPISODES_FOR_MASTERY = 3  # need at least 3 attempts before graduating
+MASTERY_THRESHOLD = 0.70
+MASTERY_WINDOW = 10
+MIN_EPISODES_FOR_MASTERY = 3
 
 
 @dataclass
@@ -106,46 +86,34 @@ class EpisodeRecord:
 @dataclass
 class CurriculumState:
     tier_index: int = 0
-    tier_episodes: int = 0  # episodes spent in current tier
+    tier_episodes: int = 0
     total_episodes: int = 0
     graduated: List[Tuple[str, int]] = field(default_factory=list)
     history: List[EpisodeRecord] = field(default_factory=list)
 
 
 class CurriculumController:
-    """
-    Tracks agent skill across scenario types.
-    Drives: scenario selection, difficulty progression, weak-spot targeting.
+    """Track progress and choose the next scenario from the active task set."""
 
-    Progression: warmup → beginner → intermediate → expert.
-    Agent must sustain MASTERY_THRESHOLD success rate over MASTERY_WINDOW episodes
-    before advancing to the next tier.
-
-    Example:
-        ctrl = CurriculumController()
-        for episode in range(200):
-            task_id, variant_seed = ctrl.select_episode()
-            score = run_episode(task_id, variant_seed)
-            ctrl.record_episode(task_id, variant_seed, score, steps)
-    """
-
-    def __init__(self, state_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        state_path: Optional[str] = None,
+        active_task_ids: Optional[List[str]] = None,
+    ) -> None:
         self._state = CurriculumState()
-        self._state_path = state_path or os.path.join(
-            "outputs", "curriculum_state.json"
+        self._active_task_ids = tuple(
+            active_task_ids or sorted({task_id for task_id, _ in SCENARIO_DIFFICULTY})
         )
-        # Allow forcing min difficulty for eval (skips warmup)
+        self._state_path = state_path or _default_state_path_for_tasks(self._active_task_ids)
+
         min_diff = float(os.environ.get("EVAL_MIN_DIFFICULTY", "0.0"))
         if min_diff > 0:
             for i, tier in enumerate(DIFFICULTY_TIERS):
                 if tier["max_diff"] >= min_diff:
                     self._state.tier_index = i
                     break
-        self._load()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        self._load()
 
     @property
     def tier_index(self) -> int:
@@ -159,50 +127,47 @@ class CurriculumController:
     def total_episodes(self) -> int:
         return self._state.total_episodes
 
-    def select_episode(self, prefer_weak_spots: bool = True) -> Tuple[str, int]:
-        """
-        Select the next (task_id, variant_seed) to train on.
+    @property
+    def active_task_ids(self) -> Tuple[str, ...]:
+        return self._active_task_ids
 
-        Strategy:
-        - Only expose scenarios within the current tier's max difficulty
-        - If prefer_weak_spots=True, bias toward scenarios the agent scored lowest
-        - Randomly sample among eligible scenarios with score-weighted probability
-        """
+    def select_episode(self, prefer_weak_spots: bool = True) -> Tuple[str, int]:
         eligible = self._eligible_scenarios()
         if not eligible:
-            # Fallback: use the easiest scenario
+            for task_id in self._active_task_ids:
+                candidate = (task_id, 0)
+                if candidate in SCENARIO_DIFFICULTY:
+                    return candidate
             return ("severity_classification", 0)
 
-        if prefer_weak_spots and self._state.history:
-            # Compute mean score per (task_id, variant_seed)
-            scores: Dict[Tuple[str, int], List[float]] = defaultdict(list)
-            for rec in self._state.history[-50:]:  # last 50 episodes
-                key = (rec.task_id, rec.variant_seed)
-                if key in eligible:
-                    scores[key].append(rec.score)
-
-            # Weight unseen / weak scenarios higher
-            weights = []
-            for key in eligible:
-                if key not in scores:
-                    weights.append(2.0)  # unseen → highest priority
-                else:
-                    mean = sum(scores[key]) / len(scores[key])
-                    weights.append(max(0.1, 1.0 - mean))  # lower score → higher weight
-
-            # Weighted random choice
-            import random
-            total = sum(weights)
-            r = random.random() * total
-            cumulative = 0.0
-            for key, w in zip(eligible, weights):
-                cumulative += w
-                if r <= cumulative:
-                    return key
-            return eligible[-1]
-        else:
-            import random
+        if not prefer_weak_spots or not self._state.history:
             return random.choice(eligible)
+
+        scores: Dict[Tuple[str, int], List[float]] = defaultdict(list)
+        for rec in self._state.history[-50:]:
+            key = (rec.task_id, rec.variant_seed)
+            if key in eligible:
+                scores[key].append(rec.score)
+
+        weights: List[float] = []
+        for key in eligible:
+            if key not in scores:
+                weights.append(2.0)
+                continue
+            mean = sum(scores[key]) / len(scores[key])
+            weights.append(max(0.1, 1.0 - mean))
+
+        total = sum(weights)
+        if total <= 0:
+            return random.choice(eligible)
+
+        draw = random.random() * total
+        cumulative = 0.0
+        for key, weight in zip(eligible, weights):
+            cumulative += weight
+            if draw <= cumulative:
+                return key
+        return eligible[-1]
 
     def record_episode(
         self,
@@ -211,7 +176,6 @@ class CurriculumController:
         score: float,
         steps: int,
     ) -> None:
-        """Record a completed episode and check for tier advancement."""
         rec = EpisodeRecord(
             task_id=task_id,
             variant_seed=variant_seed,
@@ -223,7 +187,6 @@ class CurriculumController:
         self._state.tier_episodes += 1
         self._state.total_episodes += 1
 
-        # Check if current scenario type is mastered (graduate it)
         key = (task_id, variant_seed)
         if key not in self._state.graduated:
             recent = [
@@ -236,30 +199,26 @@ class CurriculumController:
                     self._state.graduated.append(key)
                     logger.info(
                         "Graduated scenario %s variant %d (mean=%.2f)",
-                        task_id, variant_seed, mean,
+                        task_id,
+                        variant_seed,
+                        mean,
                     )
 
-        # Attempt tier advancement
         self._maybe_advance_tier()
         self._save()
 
     def should_use_adversarial(self) -> bool:
-        """True if agent is ready for adversarial designer to create new scenarios."""
-        return (
-            self._state.tier_index >= 2  # intermediate+
-            and self._recent_mean_score() >= 0.70
-        )
+        return self._state.tier_index >= 2 and self._recent_mean_score() >= 0.70
 
     def weak_spots(self, top_n: int = 3) -> List[Tuple[str, int]]:
-        """Return the N scenarios with lowest recent mean score."""
         scores: Dict[Tuple[str, int], List[float]] = defaultdict(list)
         for rec in self._state.history[-30:]:
-            scores[(rec.task_id, rec.variant_seed)].append(rec.score)
-        ranked = sorted(scores.items(), key=lambda kv: sum(kv[1]) / len(kv[1]))
-        return [k for k, _ in ranked[:top_n]]
+            if self._is_active_task(rec.task_id):
+                scores[(rec.task_id, rec.variant_seed)].append(rec.score)
+        ranked = sorted(scores.items(), key=lambda item: sum(item[1]) / len(item[1]))
+        return [key for key, _ in ranked[:top_n]]
 
-    def summary(self) -> Dict:
-        """Human-readable summary for logging."""
+    def summary(self) -> Dict[str, object]:
         return {
             "tier": self.tier_name,
             "tier_index": self._state.tier_index,
@@ -268,99 +227,109 @@ class CurriculumController:
             "graduated": len(self._state.graduated),
             "recent_mean_score": round(self._recent_mean_score(), 3),
             "eligible_scenario_count": len(self._eligible_scenarios()),
+            "active_task_ids": list(self._active_task_ids),
         }
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _eligible_scenarios(self) -> List[Tuple[str, int]]:
-        """All scenarios at or below the current tier's max difficulty."""
         max_diff = DIFFICULTY_TIERS[self._state.tier_index]["max_diff"]
         return [
             key for key, diff in SCENARIO_DIFFICULTY.items()
-            if diff <= max_diff
+            if diff <= max_diff and self._is_active_task(key[0])
         ]
 
     def _recent_mean_score(self, window: int = 20) -> float:
-        """Mean score over the last `window` episodes."""
-        recent = self._state.history[-window:]
+        recent = [
+            rec for rec in self._state.history[-window:]
+            if self._is_active_task(rec.task_id)
+        ]
         if not recent:
             return 0.0
-        return sum(r.score for r in recent) / len(recent)
+        return sum(rec.score for rec in recent) / len(recent)
+
+    def _is_active_task(self, task_id: str) -> bool:
+        return not self._active_task_ids or task_id in self._active_task_ids
 
     def _maybe_advance_tier(self) -> None:
         tier = DIFFICULTY_TIERS[self._state.tier_index]
         if self._state.tier_index >= len(DIFFICULTY_TIERS) - 1:
-            return  # already at expert
-
-        min_episodes = tier["min_episodes"]
-        advance_rate = tier["advance_rate"]
-
-        if self._state.tier_episodes < min_episodes:
+            return
+        if self._state.tier_episodes < tier["min_episodes"]:
             return
 
-        # Check recent mean score over the last `min_episodes` episodes in this tier
         tier_records = [
-            r for r in self._state.history
-            if r.tier_name == tier["name"]
+            rec for rec in self._state.history
+            if rec.tier_name == tier["name"] and self._is_active_task(rec.task_id)
         ][-MASTERY_WINDOW:]
-
-        if len(tier_records) < min_episodes:
+        if len(tier_records) < tier["min_episodes"]:
             return
 
-        mean = sum(r.score for r in tier_records) / len(tier_records)
-        if mean >= advance_rate:
+        mean = sum(rec.score for rec in tier_records) / len(tier_records)
+        if mean >= tier["advance_rate"]:
             self._state.tier_index += 1
             self._state.tier_episodes = 0
-            new_tier = DIFFICULTY_TIERS[self._state.tier_index]["name"]
             logger.info(
                 "Advanced to tier '%s' (mean=%.2f >= %.2f)",
-                new_tier, mean, advance_rate,
+                DIFFICULTY_TIERS[self._state.tier_index]["name"],
+                mean,
+                tier["advance_rate"],
             )
 
     def _save(self) -> None:
         os.makedirs(os.path.dirname(self._state_path) or ".", exist_ok=True)
-        with open(self._state_path, "w") as f:
-            json.dump(
-                {
-                    "tier_index": self._state.tier_index,
-                    "tier_episodes": self._state.tier_episodes,
-                    "total_episodes": self._state.total_episodes,
-                    "graduated": self._state.graduated,
-                    "history": [asdict(r) for r in self._state.history[-200:]],
-                },
-                f, indent=2,
-            )
+        payload = {
+            "tier_index": self._state.tier_index,
+            "tier_episodes": self._state.tier_episodes,
+            "total_episodes": self._state.total_episodes,
+            "graduated": self._state.graduated,
+            "active_task_ids": list(self._active_task_ids),
+            "history": [asdict(item) for item in self._state.history[-200:]],
+        }
+        with open(self._state_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
 
     def _load(self) -> None:
         if not os.path.exists(self._state_path):
             return
         try:
-            with open(self._state_path) as f:
-                data = json.load(f)
+            with open(self._state_path, encoding="utf-8") as handle:
+                data = json.load(handle)
             self._state.tier_index = data.get("tier_index", 0)
             self._state.tier_episodes = data.get("tier_episodes", 0)
             self._state.total_episodes = data.get("total_episodes", 0)
-            self._state.graduated = [tuple(g) for g in data.get("graduated", [])]
-            self._state.history = [
-                EpisodeRecord(**r) for r in data.get("history", [])
-            ]
+            self._state.graduated = [tuple(item) for item in data.get("graduated", [])]
+            self._state.history = [EpisodeRecord(**item) for item in data.get("history", [])]
             logger.info("Loaded curriculum state: %s", self.summary())
-        except Exception as e:
-            logger.warning("Failed to load curriculum state: %s", e)
+        except Exception as exc:
+            logger.warning("Failed to load curriculum state: %s", exc)
 
 
-# ---------------------------------------------------------------------------
-# Convenience singleton for use during training
-# ---------------------------------------------------------------------------
-
-_default_curriculum: Optional[CurriculumController] = None
+_default_curricula: Dict[Tuple[Tuple[str, ...], str], CurriculumController] = {}
 
 
-def get_curriculum() -> CurriculumController:
-    """Get or create the default curriculum controller."""
-    global _default_curriculum
-    if _default_curriculum is None:
-        _default_curriculum = CurriculumController()
-    return _default_curriculum
+def _default_state_path_for_tasks(active_task_ids: Tuple[str, ...]) -> str:
+    if not active_task_ids:
+        suffix = "all"
+    else:
+        task_set = set(active_task_ids)
+        if task_set.issubset(_IRT_TASK_IDS):
+            suffix = "irt"
+        elif task_set.issubset(_SENTINEL_TASK_IDS):
+            suffix = "sentinel"
+        else:
+            suffix = "mixed"
+    return os.path.join("outputs", f"curriculum_state_{suffix}.json")
+
+
+def get_curriculum(
+    active_task_ids: Optional[List[str]] = None,
+    state_path: Optional[str] = None,
+) -> CurriculumController:
+    task_key = tuple(active_task_ids or [])
+    resolved_state_path = state_path or _default_state_path_for_tasks(task_key)
+    cache_key = (task_key, resolved_state_path)
+    if cache_key not in _default_curricula:
+        _default_curricula[cache_key] = CurriculumController(
+            state_path=resolved_state_path,
+            active_task_ids=list(task_key) or None,
+        )
+    return _default_curricula[cache_key]

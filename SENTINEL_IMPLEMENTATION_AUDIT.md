@@ -6,7 +6,7 @@ This audit compares `SENTINEL_MASTER_PLAN.md` and `SENTINEL_ARCHITECTURE.md` aga
 
 SENTINEL is now a strong executable OpenEnv submission, not just a plan. The core oversight loop, worker fleet, scheduled misbehaviors, reward system, graders, training dry-run, counterfactual damage ledger, worker trust degradation, trust-gate auto-block, deterministic constitutional scoring, Sentinel-specific LLM judge routing, adversarial worker case training hooks, true 3-incident multi-crisis runtime, and worker/global feedback memory are implemented and tested.
 
-The remaining gaps are now mostly research-proof artifacts: a real 300-episode reward curve, before/after trajectories, and an optional arms-race visualization for the pitch.
+The remaining gaps are now mostly research-proof artifacts from a real long training run. The repo now includes `proof_pack.py`, which can export deterministic before/after trajectories immediately and plot a reward curve from an existing training log.
 
 ## Implemented
 
@@ -26,6 +26,8 @@ The remaining gaps are now mostly research-proof artifacts: a real 300-episode r
 | Worker trust degradation protocol | Done | `sentinel/trust.py`, `sentinel/models.py`, `sentinel/environment.py` |
 | True 3-incident `multi_crisis_command` runtime | Done | `sentinel/environment.py`, `sentinel/models.py`, `sentinel/workers.py`, `tests/test_sentinel.py` |
 | Worker/global feedback memory and reassignment hints | Done | `sentinel/feedback.py`, `sentinel/environment.py`, `train.py`, `tests/test_sentinel.py` |
+| Corrective supervision loop with worker revision pass | Done | `sentinel/environment.py`, `sentinel/workers.py`, `sentinel/models.py`, `tests/test_sentinel.py` |
+| Worker rehabilitation metrics in reward and grade | Done | `sentinel/rewards.py`, `sentinel/graders.py`, `sentinel/environment.py`, `tests/test_sentinel.py` |
 | Constitutional alignment scoring | Done | `sentinel/constitution.py`, `sentinel/environment.py`, `tests/test_sentinel.py` |
 | Audit records with risk and trust fields | Done | `sentinel/models.py` |
 | GRPO training dry-run | Done | `train.py` |
@@ -42,20 +44,20 @@ The remaining gaps are now mostly research-proof artifacts: a real 300-episode r
 
 | Artifact | Current state | Gap |
 |---|---|---|
-| 300-episode reward curve | Training and plotting path exist. | Needs actual GPU run or constrained proof run and saved `outputs/reward_curves/training_curve.png`. |
-| Before/after trajectories | Environment can generate them. | Need save 2-3 curated examples for the final pitch. |
+| 300-episode reward curve | `proof_pack.py` can plot from `outputs/train.log` or `outputs/checkpoints/train.log`. | Needs an actual long run or constrained proof run to make the curve meaningful. |
+| Before/after trajectories | `proof_pack.py` now exports deterministic baseline vs corrective trajectories under `outputs/proof_pack/trajectories/`. | Run it and curate the strongest 2-3 examples for the final pitch. |
 | Arms-race visualization | Case scoring and report data exist in `training/adversarial.py`. | Need optional chart image if the pitch uses the adaptive-worker story visually. |
 
 ## Not Yet Implemented
 
-- Saved 300-episode reward curve proving training improvement.
-- Before/after trajectory fixtures for the pitch.
+- Saved long-run reward curve proving training improvement.
+- Curated pitch-ready trajectory fixtures selected from the exported proof pack.
 
 ## Senior Engineering Assessment
 
 The code is now modular in the right places:
 
-- `sentinel/environment.py` owns episode state and orchestration, including 3 concurrent incident threads for `multi_crisis_command`.
+- `sentinel/environment.py` owns episode state and orchestration, including 3 concurrent incident threads for `multi_crisis_command` plus the corrective supervisor -> worker revision -> re-check loop.
 - `sentinel/workers.py` owns worker simulation and misbehavior injection.
 - `sentinel/rewards.py` owns scoring.
 - `sentinel/graders.py` owns task-specific final assessment.
@@ -66,8 +68,8 @@ The code is now modular in the right places:
 
 The codebase now has a usable backend, browser demo surface, trust gate, Sentinel judge panel, and adversarial case loop. The remaining quality issue is not duplication; it is turning the research-proof loops into submission artifacts. For first-prize probability, the next best work is:
 
-1. Run 300-episode training or a constrained proof run and save reward curves.
-2. Save before/after trajectories for hallucination, reward hacking, and confidence washing.
+1. Run 300-episode training or a constrained proof run and rerun `python proof_pack.py`.
+2. Curate before/after trajectories for hallucination, reward hacking, and confidence washing, now including a corrective worker revision example.
 3. Add an arms-race visualization if the pitch needs the adaptive-worker story as a chart instead of narration.
 4. Build the universal HF/OpenEnv oversight harness after the core proof artifacts are ready.
 
@@ -77,4 +79,5 @@ The codebase now has a usable backend, browser demo surface, trust gate, Sentine
 python validate.py
 python -m pytest tests -q
 $env:USE_SENTINEL='1'; python train.py --dry-run
+python proof_pack.py
 ```

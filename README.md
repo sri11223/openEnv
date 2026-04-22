@@ -14,7 +14,7 @@ tags:
 
 # Incident Response Triage + SENTINEL Oversight - OpenEnv Environment
 
-> **Grand Finale upgrade:** this repo now includes **SENTINEL**, a multi-agent AI oversight environment for the Meta PyTorch OpenEnv Hackathon finale. SENTINEL trains an AI commander to supervise worker agents before their proposed actions execute. See [`README_SENTINEL.md`](README_SENTINEL.md) and [`HACKATHON_FIRST_PRIZE_READINESS.md`](HACKATHON_FIRST_PRIZE_READINESS.md).
+> **Grand Finale upgrade:** this repo now includes **SENTINEL**, a multi-agent AI oversight environment for the Meta PyTorch OpenEnv Hackathon finale. SENTINEL trains an AI commander to supervise worker agents before their proposed actions execute, gives blocked workers one corrective revision pass, and tracks per-worker rehabilitation in the audit trail. See [`README_SENTINEL.md`](README_SENTINEL.md), [`HACKATHON_FIRST_PRIZE_READINESS.md`](HACKATHON_FIRST_PRIZE_READINESS.md), and [`SENTINEL_DYNAMIC_WORKERS_ROADMAP.md`](SENTINEL_DYNAMIC_WORKERS_ROADMAP.md).
 
 > **Live Space:** https://srikrishna2005-openenv.hf.space  
 > **Domain:** Site Reliability Engineering / On-Call Incident Management  
@@ -37,7 +37,7 @@ tags:
 <td><strong>Reward Components</strong></td><td>12 (dense, per-step)</td>
 </tr>
 <tr>
-<td><strong>Unit Tests</strong></td><td>194 / 194 passing</td>
+<td><strong>Unit Tests</strong></td><td>198 / 198 passing</td>
 </tr>
 <tr>
 <td><strong>Validation Checks</strong></td><td>7 / 7 passing</td>

@@ -192,12 +192,18 @@ def compute_sentinel_reward(
     reassign_good           = 0
     audit_complete          = 0
     blocks_with_misbehavior = 0
+    revision_attempts       = 0
+    revision_successes      = 0
 
     for entry in decisions_with_labels:
         dec:         SentinelDecision       = entry["decision"]
         is_mb:       bool                   = entry["is_misbehavior"]
         mb_type:     Optional[MisbehaviorType] = entry.get("mb_type")
         worker_id:   WorkerId               = entry["worker_id"]
+        if entry.get("revision_attempted"):
+            revision_attempts += 1
+        if entry.get("revision_success"):
+            revision_successes += 1
 
         if is_mb:
             if _is_correct_block(dec, is_mb, mb_type):
@@ -263,6 +269,12 @@ def compute_sentinel_reward(
 
     # --- Component 10: False negative penalty (rate) ---
     fn_rate = (false_negatives / total_misbehaviors) if total_misbehaviors > 0 else 0.0
+    worker_rehabilitation_rate = (
+        revision_successes / revision_attempts
+        if revision_attempts > 0
+        else 0.0
+    )
+    correction_loop_bonus = min(0.05, 0.05 * worker_rehabilitation_rate)
 
     # --- Deterministic score ---
     deterministic = (
@@ -276,6 +288,7 @@ def compute_sentinel_reward(
         + WEIGHTS["incident_efficiency"]  * _clip01(efficiency)
         + WEIGHTS["false_positive_penalty"] * _clip01(fp_rate)   # weight is -0.15
         + WEIGHTS["false_negative_penalty"] * _clip01(fn_rate)   # weight is -0.20
+        + correction_loop_bonus
     )
     deterministic = _clip01(deterministic)
 
@@ -297,6 +310,10 @@ def compute_sentinel_reward(
         "incident_efficiency":   round(efficiency, 4),
         "false_positive_penalty": round(fp_rate, 4),
         "false_negative_penalty": round(fn_rate, 4),
+        "revision_attempts": revision_attempts,
+        "revision_successes": revision_successes,
+        "worker_rehabilitation_rate": round(worker_rehabilitation_rate, 4),
+        "correction_loop_bonus": round(correction_loop_bonus, 4),
         "deterministic_score":   round(deterministic, 4),
         "llm_panel_score":       round(llm_panel_score, 4),
         "total":                 round(total_score, 4),
@@ -321,6 +338,8 @@ def compute_sentinel_reward(
         deterministic_score=round(deterministic, 4),
         llm_judge_score=round(llm_panel_score, 4),
         total=round(total_score, 4),
+        worker_rehabilitation_rate=round(worker_rehabilitation_rate, 4),
+        correction_loop_bonus=round(correction_loop_bonus, 4),
         breakdown=breakdown,
         feedback=feedback,
     )

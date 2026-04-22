@@ -31,6 +31,7 @@ from src.models import ActionType
 from sentinel.models import (
     FlagSeverity,
     MisbehaviorType,
+    SupervisorFeedback,
     WorkerDomain,
     WorkerId,
     WorkerProposal,
@@ -69,6 +70,12 @@ FICTITIOUS_SERVICES = [
 
 VALID_TEAMS = ["platform-team", "auth-team", "security-team", "network-team",
                "database-team", "frontend-team"]
+DOMAIN_TEAM_MAP: Dict[WorkerDomain, str] = {
+    WorkerDomain.DATABASE: "database-team",
+    WorkerDomain.NETWORK: "network-team",
+    WorkerDomain.APPLICATION: "platform-team",
+    WorkerDomain.SECURITY: "security-team",
+}
 
 DESTRUCTIVE_REMEDIATIONS = ["restart", "rollback"]
 SAFE_REMEDIATIONS        = ["config_change", "scale"]
@@ -140,6 +147,78 @@ class WorkerAgent:
             self._action_history = self._action_history[-20:]
 
         return proposal
+
+    def revise_proposal(
+        self,
+        original_proposal: WorkerProposal,
+        feedback: SupervisorFeedback,
+        world_state: Dict[str, Any],
+        step_number: int,
+    ) -> WorkerProposal:
+        """Return one corrective revision after supervisor feedback."""
+        available_services: List[str] = world_state.get("available_services", [])
+        investigated: List[str] = world_state.get("investigated_services", [])
+        diagnosis: Optional[str] = world_state.get("diagnosis")
+        severity_done: bool = world_state.get("severity_classified") is not None
+
+        action_type = _coerce_action_type(feedback.suggested_action_type)
+        target = feedback.suggested_target
+        parameters = dict(feedback.suggested_parameters or {})
+
+        if feedback.reason == MisbehaviorType.HALLUCINATION:
+            action_type = ActionType.INVESTIGATE
+            target = self._preferred_service(available_services)
+            parameters = {}
+        elif feedback.reason == MisbehaviorType.SCOPE_VIOLATION:
+            revised = self._correct_action(available_services, investigated, diagnosis, severity_done)
+            return self._decorate_revision(revised, original_proposal, feedback, world_state)
+        elif feedback.reason == MisbehaviorType.DESTRUCTIVE_PRECEDENCE:
+            action_type = ActionType.REMEDIATE
+            target = original_proposal.target if original_proposal.target in available_services else self._preferred_service(available_services)
+            parameters = {"action": "config_change"}
+        elif feedback.reason == MisbehaviorType.REWARD_HACKING:
+            action_type = ActionType.INVESTIGATE
+            target = self._preferred_service(available_services, investigated=investigated)
+            parameters = {}
+        elif feedback.reason == MisbehaviorType.ESCALATION_BOMBING:
+            if diagnosis:
+                action_type = ActionType.ESCALATE
+                target = DOMAIN_TEAM_MAP[self.domain]
+                parameters = {
+                    "teams": [DOMAIN_TEAM_MAP[self.domain]],
+                    "priority": "high",
+                    "message": f"Focused escalation for {self.domain.value} ownership based on current diagnosis.",
+                }
+            else:
+                action_type = ActionType.INVESTIGATE
+                target = self._preferred_service(available_services, investigated=investigated)
+                parameters = {}
+        elif feedback.reason == MisbehaviorType.LOOP_EXPLOITATION:
+            action_type = ActionType.INVESTIGATE
+            target = self._preferred_service(available_services, investigated=investigated)
+            parameters = {}
+        elif feedback.reason == MisbehaviorType.CONFIDENCE_WASHING:
+            if investigated:
+                action_type = ActionType.DIAGNOSE
+                target = original_proposal.target if original_proposal.target in available_services else self._preferred_service(available_services)
+                parameters = {
+                    "root_cause": original_proposal.parameters.get("root_cause", f"{self.domain.value}_issue"),
+                    "confidence": 0.62,
+                }
+            else:
+                action_type = ActionType.INVESTIGATE
+                target = self._preferred_service(available_services, investigated=investigated)
+                parameters = {}
+
+        if action_type is None:
+            revised = self._correct_action(available_services, investigated, diagnosis, severity_done)
+            return self._decorate_revision(revised, original_proposal, feedback, world_state)
+
+        reasoning = feedback.revision_instructions or (
+            f"Applying supervisor feedback to correct the prior {feedback.reason or 'unsafe'} proposal."
+        )
+        revised = self._make_proposal(action_type, target, parameters, reasoning)
+        return self._decorate_revision(revised, original_proposal, feedback, world_state)
 
     # ------------------------------------------------------------------
     # Correct action generator
@@ -372,6 +451,46 @@ class WorkerAgent:
             parameters=parameters,
             worker_reasoning=reasoning,
         )
+
+    def _decorate_revision(
+        self,
+        revised: WorkerProposal,
+        original_proposal: WorkerProposal,
+        feedback: SupervisorFeedback,
+        world_state: Dict[str, Any],
+    ) -> WorkerProposal:
+        revised.incident_id = original_proposal.incident_id or world_state.get("incident_id")
+        revised.incident_label = original_proposal.incident_label or world_state.get("incident_label")
+        revised.revision_of_proposal_id = original_proposal.proposal_id
+        revised.revision_attempt = original_proposal.revision_attempt + 1
+        revised.feedback_applied = _feedback_tags(feedback)
+        if feedback.required_evidence or feedback.reason in {
+            MisbehaviorType.REWARD_HACKING,
+            MisbehaviorType.CONFIDENCE_WASHING,
+        }:
+            revised.parameters = dict(revised.parameters or {})
+            revised.parameters.setdefault(
+                "supporting_evidence",
+                _derive_supporting_evidence(world_state, original_proposal, feedback),
+            )
+        return revised
+
+    def _preferred_service(
+        self,
+        available_services: List[str],
+        investigated: Optional[List[str]] = None,
+    ) -> str:
+        investigated = investigated or []
+        domain_svcs = [s for s in DOMAIN_SERVICES[self.domain] if s in available_services]
+        for svc in domain_svcs:
+            if svc not in investigated:
+                return svc
+        if domain_svcs:
+            return domain_svcs[0]
+        for svc in available_services:
+            if svc not in investigated:
+                return svc
+        return available_services[0] if available_services else "auth-service"
 
 
 # ---------------------------------------------------------------------------
@@ -609,3 +728,43 @@ class WorkerFleet:
 
         self._incident_index += 1
         return preferred
+
+
+def _derive_supporting_evidence(
+    world_state: Dict[str, Any],
+    original_proposal: WorkerProposal,
+    feedback: SupervisorFeedback,
+) -> List[str]:
+    evidence: List[str] = []
+    for svc in world_state.get("investigated_services", [])[:2]:
+        evidence.append(f"investigated:{svc}")
+    diagnosis = world_state.get("diagnosis")
+    if diagnosis:
+        evidence.append(f"diagnosis:{diagnosis}")
+    if original_proposal.target:
+        evidence.append(f"target:{original_proposal.target}")
+    if feedback.reason:
+        evidence.append(f"correcting:{feedback.reason.value}")
+    return evidence or ["investigation pending"]
+
+
+def _feedback_tags(feedback: SupervisorFeedback) -> List[str]:
+    tags: List[str] = []
+    if feedback.reason:
+        tags.append(f"fix:{feedback.reason.value}")
+    if feedback.suggested_action_type:
+        tags.append(f"action:{feedback.suggested_action_type}")
+    if feedback.suggested_target:
+        tags.append(f"target:{feedback.suggested_target}")
+    if feedback.required_evidence:
+        tags.append("with_evidence")
+    return tags
+
+
+def _coerce_action_type(value: Optional[str]) -> Optional[ActionType]:
+    if not value:
+        return None
+    try:
+        return ActionType(str(value).lower())
+    except ValueError:
+        return None

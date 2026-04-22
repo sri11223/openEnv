@@ -250,12 +250,15 @@ openEnv/
 │
 ├── tests/                    # Test suite
 │   ├── test_env.py           # IRT environment tests (145 tests)
-│   ├── test_sentinel.py      # SENTINEL tests (45 tests)
+│   ├── test_sentinel.py      # SENTINEL runtime tests (53 tests)
+│   ├── test_training_sync.py # Training / schema sync tests (5 tests)
 │   └── test_quality.py       # Quality checks
 │
+├── SENTINEL_MASTER_PLAN.md   # Complete system design
+├── SENTINEL_ARCHITECTURE.md  # Flow diagrams
+├── proof_pack.py             # Reward-curve + trajectory artifact generator
+│
 └── winner_analysis/          # Research documentation
-    ├── SENTINEL_MASTER_PLAN.md          # Complete system design
-    ├── SENTINEL_ARCHITECTURE.md         # Flow diagrams
     ├── REWARD_ENGINEERING.md            # Reward design deep-dive
     ├── TRAINING_DEEP_DIVE.md            # GRPO hyperparameters
     └── WINNER_ANALYSIS.md               # SF winner strategies
@@ -272,19 +275,27 @@ pytest tests/ -v
 # IRT environment tests (145 tests)
 pytest tests/test_env.py -v
 
-# SENTINEL environment tests (45 tests)
+# SENTINEL runtime tests
 pytest tests/test_sentinel.py -v
 
-# Current SENTINEL suite size
-# 49 tests
+# Training and schema sync tests
+pytest tests/test_training_sync.py -v
+
+# Current total suite size
+# 203 tests
 
 # Validation checks (8 checks)
 python validate.py
+
+# Export proof artifacts
+python proof_pack.py
 ```
 
 Recent additions:
 - True 3-incident `multi_crisis_command` runtime
 - Worker/global feedback memory with reassignment hints
+- Corrective supervision loop: blocked, redirected, or reassigned workers revise once before execution
+- Worker rehabilitation metrics surfaced in reward, grade, and audit outputs
 
 **Test coverage:**
 - ✅ All 7 IRT tasks
@@ -297,6 +308,7 @@ Recent additions:
 - ✅ Counterfactual prevented/allowed damage ledger
 - ✅ Sentinel-specific LLM judge routing
 - ✅ Sentinel adversarial arms-race case scoring
+- ✅ Corrective worker revision loop and rehabilitation metrics
 - ✅ Audit trail completeness
 - ✅ Reward computation edge cases
 
@@ -340,7 +352,7 @@ Open `http://localhost:7860/sentinel/dashboard` after starting `python app.py`. 
 
 ## 📚 Documentation
 
-- **[SENTINEL_MASTER_PLAN.md](winner_analysis/SENTINEL_MASTER_PLAN.md)** — Complete system design (28 sections)
+- **[SENTINEL_MASTER_PLAN.md](SENTINEL_MASTER_PLAN.md)** — Complete system design (28 sections)
 - **[SENTINEL_ARCHITECTURE.md](SENTINEL_ARCHITECTURE.md)** — Flow diagrams (8 diagrams)
 - **[REWARD_ENGINEERING.md](winner_analysis/REWARD_ENGINEERING.md)** — Reward design deep-dive
 - **[TRAINING_DEEP_DIVE.md](winner_analysis/TRAINING_DEEP_DIVE.md)** — GRPO setup + hyperparameters

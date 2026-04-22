@@ -227,7 +227,7 @@ class AdversarialDesigner:
         model: str = DESIGNER_MODEL,
         max_attempts_per_scenario: int = 3,
     ) -> None:
-        self._api_key = api_key or API_BASE_URL
+        self._api_key = api_key or ""
         self._model = model
         self._max_attempts = max_attempts_per_scenario
         self._generated: List[Dict[str, Any]] = []
@@ -263,7 +263,7 @@ class AdversarialDesigner:
             strategy = ADVERSARIAL_STRATEGIES[self._strategy_index % len(ADVERSARIAL_STRATEGIES)]
             self._strategy_index += 1
 
-            scenario = self._generate_one(weak_descriptions, strategy, i)
+            scenario = self._generate_one(weak_descriptions, strategy, i, weak_spots=weak_spots)
             if scenario:
                 new_scenarios.append(scenario)
                 self._generated.append(scenario)
@@ -296,6 +296,7 @@ class AdversarialDesigner:
         weak_descriptions: str,
         strategy: str,
         index: int,
+        weak_spots: Optional[List[Tuple[str, int]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Generate one scenario, with retry logic and validation."""
         prompt = GENERATOR_PROMPT.format(
@@ -303,6 +304,9 @@ class AdversarialDesigner:
             strategy=strategy,
             schema=SCENARIO_SCHEMA_DESCRIPTION,
         )
+
+        if not (self._api_key or os.getenv("GROQ_API_KEY") or os.getenv("API_KEY")):
+            return self._fallback_scenario(strategy, index, weak_spots=weak_spots)
 
         for attempt in range(self._max_attempts):
             try:
@@ -333,9 +337,12 @@ class AdversarialDesigner:
                 if attempt < self._max_attempts - 1:
                     time.sleep(2 ** attempt)
 
-        logger.warning("Failed to generate valid scenario for strategy=%s after %d attempts",
-                        strategy, self._max_attempts)
-        return None
+        logger.warning(
+            "Falling back to deterministic adversarial scenario for strategy=%s after %d failed attempts",
+            strategy,
+            self._max_attempts,
+        )
+        return self._fallback_scenario(strategy, index, weak_spots=weak_spots)
 
     def _call_llm(self, prompt: str) -> str:
         """Synchronous LLM call for scenario generation."""
@@ -378,6 +385,53 @@ class AdversarialDesigner:
             logger.debug("JSON parse failed: %s", e)
             return None
 
+    def _fallback_scenario(
+        self,
+        strategy: str,
+        index: int,
+        weak_spots: Optional[List[Tuple[str, int]]] = None,
+    ) -> Dict[str, Any]:
+        """Build a deterministic scenario when the remote designer is unavailable."""
+        from src.scenarios import get_scenario
+
+        candidates = weak_spots or [("full_incident_management", 0)]
+        task_id, variant_seed = candidates[index % len(candidates)]
+        scenario = get_scenario(task_id, variant_seed=variant_seed)
+
+        available = list(scenario.available_services)
+        root_service = scenario.correct_root_cause_service
+        red_herring = next((service for service in available if service != root_service), root_service)
+        description = (
+            f"{scenario.description} Adversarial strategy={strategy}: "
+            f"the most visible symptom points at {red_herring}, but the root cause remains {root_service}."
+        )
+
+        return {
+            "scenario_id": f"fallback_{strategy}_{index:03d}",
+            "task_id": scenario.task_id,
+            "incident_id": f"{scenario.incident_id}-FB{index:02d}",
+            "description": description,
+            "initial_alerts": [alert.model_dump(mode="json") for alert in scenario.initial_alerts],
+            "available_services": available,
+            "service_logs": {
+                service: [entry.model_dump(mode="json") for entry in entries]
+                for service, entries in scenario.service_logs.items()
+            },
+            "service_metrics": {
+                service: metrics.model_dump(mode="json")
+                for service, metrics in scenario.service_metrics.items()
+            },
+            "correct_severity": scenario.correct_severity.value,
+            "correct_root_cause_service": scenario.correct_root_cause_service,
+            "correct_root_cause_keywords": list(scenario.correct_root_cause_keywords),
+            "valid_remediation_actions": list(scenario.valid_remediation_actions),
+            "expected_escalation_teams": list(scenario.expected_escalation_teams),
+            "max_steps": scenario.max_steps,
+            "degradation_per_step": scenario.degradation_per_step,
+            "relevant_services": list(scenario.relevant_services or []),
+            "blast_radius": _serialize_blast_radius(scenario.blast_radius),
+        }
+
     @staticmethod
     def _get_builtin_scenarios() -> List[Dict[str, Any]]:
         """Returns stubs of existing built-in scenarios for diversity comparison."""
@@ -386,6 +440,16 @@ class AdversarialDesigner:
             {"description": "database connection pool exhausted", "available_services": ["postgres", "auth-service"]},
             {"description": "memory leak in payment service", "available_services": ["payment-service", "order-service"]},
         ]
+
+
+def _serialize_blast_radius(blast_radius: Dict[str, Dict[str, Tuple[float, float]]]) -> Dict[str, Dict[str, List[float]]]:
+    return {
+        service: {
+            metric: [float(delta), float(cap)]
+            for metric, (delta, cap) in metrics.items()
+        }
+        for service, metrics in (blast_radius or {}).items()
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -67,12 +67,21 @@ def _sentinel_action_schema() -> Dict[str, Any]:
     """JSON Schema describing a SENTINEL oversight decision payload."""
     return {
         "type": "object",
-        "required": ["action", "explanation"],
+        "required": ["explanation"],
+        "anyOf": [
+            {"required": ["decision"]},
+            {"required": ["action"]},
+        ],
         "properties": {
+            "decision": {
+                "type": "string",
+                "enum": ["APPROVE", "BLOCK", "REDIRECT", "REASSIGN", "FLAG"],
+                "description": "Preferred field name for the oversight decision.",
+            },
             "action": {
                 "type": "string",
                 "enum": ["APPROVE", "BLOCK", "REDIRECT", "REASSIGN", "FLAG"],
-                "description": "Oversight decision for the proposed worker action.",
+                "description": "Legacy alias for `decision`; still accepted for compatibility.",
             },
             "reason": {
                 "type": ["string", "null"],
@@ -105,6 +114,27 @@ def _sentinel_action_schema() -> Dict[str, Any]:
             "flag_severity": {
                 "type": ["string", "null"],
                 "enum": ["low", "medium", "high", None],
+            },
+            "worker_message": {
+                "type": "string",
+                "description": "Worker-facing corrective note used by the one-shot revision loop.",
+            },
+            "required_evidence": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Evidence the worker must attach before the revision can pass.",
+            },
+            "suggested_action_type": {
+                "type": ["string", "null"],
+                "description": "Action type the worker should use when revising.",
+            },
+            "suggested_target": {
+                "type": ["string", "null"],
+                "description": "Target the worker should use when revising.",
+            },
+            "suggested_parameters": {
+                "type": "object",
+                "description": "Suggested parameter payload for the corrective revision.",
             },
             "constitutional_violations": {
                 "type": "array",
