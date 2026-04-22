@@ -1,6 +1,6 @@
 # SENTINEL Implementation Audit
 
-This audit compares the current codebase against the local design intent and the tracked public summaries in `SENTINEL_PUBLIC_OVERVIEW.md` and `HACKATHON_FIRST_PRIZE_READINESS.md`.
+This audit compares the current codebase against the local design intent and the tracked public summaries in `public-overview.md` and `submission-readiness.md`.
 
 ## Executive Verdict
 
@@ -37,7 +37,7 @@ The remaining gaps are now mostly research-proof artifacts from a real long trai
 | Adversarial scenario designer and Sentinel arms-race cases | Done | `training/adversarial.py`, `train.py` |
 | Trust gate auto-block | Done | `sentinel/environment.py`, `sentinel/trust.py` |
 | Real-time demo/API surface | Done | `/sentinel/dashboard`, `/sentinel/intercept`, `/sentinel/stream` in `app.py` |
-| Universal oversight harness plan | Documented as finale extension | `UNIVERSAL_SENTINEL_OVERSIGHT_PLAN.md` |
+| Universal oversight harness plan | Documented as finale extension | `universal-oversight-plan.md` |
 | Validation and tests | Done | `validate.py`, `tests/` |
 
 ## Remaining Proof Artifacts

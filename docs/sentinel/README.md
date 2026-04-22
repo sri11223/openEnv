@@ -247,17 +247,18 @@ The cleanest demo sequence is:
 
 Tracked public docs:
 
-- [SENTINEL_PUBLIC_OVERVIEW.md](SENTINEL_PUBLIC_OVERVIEW.md)
-- [OPENENV_RL_GUIDE_ALIGNMENT_TABLE.md](OPENENV_RL_GUIDE_ALIGNMENT_TABLE.md)
-- [HACKATHON_FIRST_PRIZE_READINESS.md](HACKATHON_FIRST_PRIZE_READINESS.md)
-- [SENTINEL_IMPLEMENTATION_AUDIT.md](SENTINEL_IMPLEMENTATION_AUDIT.md)
-- [SENTINEL_DYNAMIC_WORKERS_ROADMAP.md](SENTINEL_DYNAMIC_WORKERS_ROADMAP.md)
+- [Public Architecture Overview](public-overview.md)
+- [OpenEnv RL Guide Alignment](openenv-guide-alignment.md)
+- [Submission Readiness](submission-readiness.md)
+- [Implementation Audit](implementation-audit.md)
+- [Dynamic Workers Roadmap](dynamic-workers-roadmap.md)
+- [Universal Oversight Plan](universal-oversight-plan.md)
 
 Research docs:
 
-- [winner_analysis/REWARD_ENGINEERING.md](winner_analysis/REWARD_ENGINEERING.md)
-- [winner_analysis/TRAINING_DEEP_DIVE.md](winner_analysis/TRAINING_DEEP_DIVE.md)
-- [winner_analysis/WINNER_ANALYSIS.md](winner_analysis/WINNER_ANALYSIS.md)
+- [Reward Engineering](../../winner_analysis/REWARD_ENGINEERING.md)
+- [Training Deep Dive](../../winner_analysis/TRAINING_DEEP_DIVE.md)
+- [Winner Analysis](../../winner_analysis/WINNER_ANALYSIS.md)
 
 ## Current Reality Check
 

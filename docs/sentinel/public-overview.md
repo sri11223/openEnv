@@ -110,9 +110,8 @@ python proof_pack.py `
 
 ## Public Supporting Docs
 
-- `README_SENTINEL.md`
-- `HACKATHON_FIRST_PRIZE_READINESS.md`
-- `SENTINEL_IMPLEMENTATION_AUDIT.md`
-- `OPENENV_RL_GUIDE_ALIGNMENT_TABLE.md`
-- `SENTINEL_DYNAMIC_WORKERS_ROADMAP.md`
-
+- `README.md`
+- `submission-readiness.md`
+- `implementation-audit.md`
+- `openenv-guide-alignment.md`
+- `dynamic-workers-roadmap.md`
