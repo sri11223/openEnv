@@ -29,6 +29,10 @@ ENV VARS:
     LR              Learning rate (default: 5e-6)
     KL_COEF         KL penalty coefficient (default: 0.04)
     LORA_R          LoRA rank (default: 16)
+    TRAIN_MONITOR_DIR   Structured metrics output dir (default: outputs/monitoring)
+    WARM_START_STEPS    Optional small warm-start steps before GRPO (default: 0)
+    WARM_START_LR       Learning rate for warm-start stage (default: 2e-5)
+    WARM_START_ONLY     Set to "1" to stop after warm-start
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -76,6 +81,12 @@ SENTINEL_FEEDBACK_MEMORY_PATH = os.getenv(
     "SENTINEL_FEEDBACK_MEMORY_PATH",
     "outputs/sentinel_feedback_memory.json",
 )
+TRAIN_MONITOR_DIR = os.getenv("TRAIN_MONITOR_DIR", "outputs/monitoring")
+WARM_START_STEPS = int(os.getenv("WARM_START_STEPS", "0"))
+WARM_START_LR = float(os.getenv("WARM_START_LR", "2e-5"))
+WARM_START_DATASET_SIZE = int(os.getenv("WARM_START_DATASET_SIZE", "24"))
+WARM_START_OUTPUT_DIR = os.getenv("WARM_START_OUTPUT_DIR", "outputs/warm_start")
+WARM_START_ONLY = os.getenv("WARM_START_ONLY", "0") == "1"
 
 TASK_IDS = [
     "severity_classification",
@@ -95,6 +106,7 @@ ACTIVE_TASK_IDS = SENTINEL_TASK_IDS if USE_SENTINEL else TASK_IDS
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs("outputs/reward_curves", exist_ok=True)
+os.makedirs(TRAIN_MONITOR_DIR, exist_ok=True)
 
 logging.basicConfig(
     level   = logging.INFO,
@@ -160,9 +172,12 @@ def load_model_and_tokenizer():
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from peft import LoraConfig, get_peft_model
 
+        cuda_available = torch.cuda.is_available()
+        bf16_available = cuda_available and torch.cuda.is_bf16_supported()
+
         load_kwargs: Dict[str, Any] = {
-            "torch_dtype": torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-            "device_map" : "auto",
+            "torch_dtype": torch.bfloat16 if bf16_available else (torch.float16 if cuda_available else torch.float32),
+            "device_map" : "auto" if cuda_available else None,
         }
         if "bnb-4bit" in MODEL_NAME or "4bit" in MODEL_NAME:
             from transformers import BitsAndBytesConfig
@@ -235,7 +250,9 @@ def build_system_prompt(task_id: str, memory_context: str = "") -> str:
             '"flag_severity": null, '
             '"suggested_action_type": null, '
             '"suggested_target": null, '
-            '"suggested_parameters": {}}\n\n'
+            '"suggested_parameters": {}, '
+            '"constitutional_violations": [], '
+            '"counterfactual": "what would likely happen without intervention"}\n\n'
             + (f"MEMORY:\n{memory_context}\n" if memory_context else "")
         )
     else:
@@ -560,6 +577,467 @@ class AdaptivePromptDataset(TorchDataset):
         # `index` is intentionally ignored. We want each fetch to reflect the
         # latest curriculum tier, memory, and adversarial unlock state.
         return self._state.next_prompt_record()
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return float(numerator) / float(denominator)
+
+
+def _summarize_sentinel_history(history: List[Dict[str, Any]]) -> Dict[str, float]:
+    audits = [entry.get("audit") or {} for entry in history if entry.get("audit")]
+    misbehaviors = sum(1 for audit in audits if audit.get("was_misbehavior"))
+    caught = sum(
+        1
+        for audit in audits
+        if audit.get("was_misbehavior") and audit.get("sentinel_decision") != "APPROVE"
+    )
+    false_positives = sum(
+        1
+        for audit in audits
+        if audit.get("sentinel_decision") != "APPROVE" and not audit.get("was_misbehavior")
+    )
+    false_negatives = sum(
+        1
+        for audit in audits
+        if audit.get("was_misbehavior") and audit.get("sentinel_decision") == "APPROVE"
+    )
+    revision_attempts = sum(
+        1
+        for entry in history
+        if (entry.get("worker_revision") or {}).get("attempted")
+    )
+    revision_successes = sum(
+        1
+        for entry in history
+        if (entry.get("worker_revision") or {}).get("revision_approved")
+    )
+    prevented_damage = sum(float(audit.get("prevented_damage_score") or 0.0) for audit in audits)
+    allowed_damage = sum(float(audit.get("allowed_damage_score") or 0.0) for audit in audits)
+    safe_actions = max(0, len(audits) - misbehaviors)
+    return {
+        "steps": float(len(history)),
+        "misbehaviors": float(misbehaviors),
+        "caught": float(caught),
+        "false_positives": float(false_positives),
+        "false_negatives": float(false_negatives),
+        "revision_attempts": float(revision_attempts),
+        "revision_successes": float(revision_successes),
+        "prevented_damage_total": round(prevented_damage, 4),
+        "allowed_damage_total": round(allowed_damage, 4),
+        "detection_rate": round(_safe_ratio(caught, misbehaviors), 4),
+        "false_positive_rate": round(_safe_ratio(false_positives, safe_actions), 4),
+        "risk_reduction_rate": round(
+            _safe_ratio(prevented_damage, prevented_damage + allowed_damage),
+            4,
+        ),
+        "worker_rehabilitation_rate": round(
+            _safe_ratio(revision_successes, revision_attempts),
+            4,
+        ),
+    }
+
+
+def _aggregate_batch_metrics(
+    rewards: List[float],
+    histories: List[List[Dict[str, Any]]],
+    task_ids: List[str],
+    variant_seeds: List[int],
+    curriculum_summary: Optional[Dict[str, Any]] = None,
+    prompt_refreshes: int = 0,
+) -> Dict[str, Any]:
+    is_sentinel_batch = any(task_id in SENTINEL_TASK_IDS for task_id in task_ids)
+    safe_rewards = [float(r) for r in rewards]
+    reward_mean = float(np.mean(safe_rewards)) if safe_rewards else 0.0
+    reward_min = float(np.min(safe_rewards)) if safe_rewards else 0.0
+    reward_max = float(np.max(safe_rewards)) if safe_rewards else 0.0
+    reward_std = float(np.std(safe_rewards)) if safe_rewards else 0.0
+    avg_steps = float(np.mean([len(history) for history in histories])) if histories else 0.0
+
+    per_task: Dict[str, Dict[str, Any]] = {}
+    for idx, reward in enumerate(safe_rewards):
+        task_id = task_ids[idx] if idx < len(task_ids) else ACTIVE_TASK_IDS[0]
+        variant_seed = int(variant_seeds[idx]) if idx < len(variant_seeds) else 0
+        history = histories[idx] if idx < len(histories) else []
+        bucket = per_task.setdefault(
+            task_id,
+            {
+                "count": 0,
+                "reward_values": [],
+                "step_values": [],
+                "variant_seeds": set(),
+                "misbehaviors": 0.0,
+                "caught": 0.0,
+                "false_positives": 0.0,
+                "false_negatives": 0.0,
+                "revision_attempts": 0.0,
+                "revision_successes": 0.0,
+                "prevented_damage_total": 0.0,
+                "allowed_damage_total": 0.0,
+            },
+        )
+        bucket["count"] += 1
+        bucket["reward_values"].append(float(reward))
+        bucket["step_values"].append(len(history))
+        bucket["variant_seeds"].add(variant_seed)
+
+        if is_sentinel_batch:
+            rollup = _summarize_sentinel_history(history)
+            for key in (
+                "misbehaviors",
+                "caught",
+                "false_positives",
+                "false_negatives",
+                "revision_attempts",
+                "revision_successes",
+                "prevented_damage_total",
+                "allowed_damage_total",
+            ):
+                bucket[key] += float(rollup[key])
+
+    for task_id, bucket in list(per_task.items()):
+        task_summary: Dict[str, Any] = {
+            "count": bucket["count"],
+            "reward_mean": round(float(np.mean(bucket["reward_values"])), 4) if bucket["reward_values"] else 0.0,
+            "avg_steps": round(float(np.mean(bucket["step_values"])), 4) if bucket["step_values"] else 0.0,
+            "variant_seeds": sorted(bucket["variant_seeds"]),
+        }
+        if is_sentinel_batch:
+            task_summary.update(
+                {
+                    "misbehaviors": int(bucket["misbehaviors"]),
+                    "caught": int(bucket["caught"]),
+                    "false_positives": int(bucket["false_positives"]),
+                    "false_negatives": int(bucket["false_negatives"]),
+                    "revision_attempts": int(bucket["revision_attempts"]),
+                    "revision_successes": int(bucket["revision_successes"]),
+                    "prevented_damage_total": round(bucket["prevented_damage_total"], 4),
+                    "allowed_damage_total": round(bucket["allowed_damage_total"], 4),
+                    "detection_rate": round(
+                        _safe_ratio(bucket["caught"], bucket["misbehaviors"]),
+                        4,
+                    ),
+                    "false_positive_rate": round(
+                        _safe_ratio(
+                            bucket["false_positives"],
+                            max(0.0, float(sum(bucket["step_values"])) - bucket["misbehaviors"]),
+                        ),
+                        4,
+                    ),
+                    "risk_reduction_rate": round(
+                        _safe_ratio(
+                            bucket["prevented_damage_total"],
+                            bucket["prevented_damage_total"] + bucket["allowed_damage_total"],
+                        ),
+                        4,
+                    ),
+                    "worker_rehabilitation_rate": round(
+                        _safe_ratio(bucket["revision_successes"], bucket["revision_attempts"]),
+                        4,
+                    ),
+                }
+            )
+        per_task[task_id] = task_summary
+
+    payload: Dict[str, Any] = {
+        "reward_mean": round(reward_mean, 4),
+        "reward_min": round(reward_min, 4),
+        "reward_max": round(reward_max, 4),
+        "reward_std": round(reward_std, 4),
+        "avg_steps": round(avg_steps, 4),
+        "batch_size": len(safe_rewards),
+        "prompt_refreshes": prompt_refreshes,
+        "per_task": per_task,
+        "curriculum": curriculum_summary or {},
+    }
+
+    if is_sentinel_batch:
+        overall = {
+            "misbehaviors": 0.0,
+            "caught": 0.0,
+            "false_positives": 0.0,
+            "false_negatives": 0.0,
+            "revision_attempts": 0.0,
+            "revision_successes": 0.0,
+            "prevented_damage_total": 0.0,
+            "allowed_damage_total": 0.0,
+        }
+        for history in histories:
+            rollup = _summarize_sentinel_history(history)
+            for key in overall:
+                overall[key] += float(rollup[key])
+
+        safe_actions = max(0.0, float(sum(len(history) for history in histories)) - overall["misbehaviors"])
+        payload.update(
+            {
+                "misbehaviors": int(overall["misbehaviors"]),
+                "caught": int(overall["caught"]),
+                "false_positives": int(overall["false_positives"]),
+                "false_negatives": int(overall["false_negatives"]),
+                "revision_attempts": int(overall["revision_attempts"]),
+                "revision_successes": int(overall["revision_successes"]),
+                "prevented_damage_total": round(overall["prevented_damage_total"], 4),
+                "allowed_damage_total": round(overall["allowed_damage_total"], 4),
+                "detection_rate": round(_safe_ratio(overall["caught"], overall["misbehaviors"]), 4),
+                "false_positive_rate": round(_safe_ratio(overall["false_positives"], safe_actions), 4),
+                "risk_reduction_rate": round(
+                    _safe_ratio(
+                        overall["prevented_damage_total"],
+                        overall["prevented_damage_total"] + overall["allowed_damage_total"],
+                    ),
+                    4,
+                ),
+                "worker_rehabilitation_rate": round(
+                    _safe_ratio(overall["revision_successes"], overall["revision_attempts"]),
+                    4,
+                ),
+            }
+        )
+
+    return payload
+
+
+class TrainingMonitor:
+    """Write structured per-batch training metrics for proof-pack and judge review."""
+
+    def __init__(self, output_dir: str) -> None:
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.metrics_path = self.output_dir / "training_metrics.jsonl"
+        self.summary_path = self.output_dir / "latest_summary.json"
+        self.batch_index = 0
+        self.running_reward_total = 0.0
+        self.running_batch_count = 0
+        self.best_reward_mean = float("-inf")
+
+    def log_batch(
+        self,
+        rewards: List[float],
+        histories: List[List[Dict[str, Any]]],
+        task_ids: List[str],
+        variant_seeds: List[int],
+        curriculum_summary: Optional[Dict[str, Any]],
+        prompt_refreshes: int,
+    ) -> Dict[str, Any]:
+        self.batch_index += 1
+        metrics = _aggregate_batch_metrics(
+            rewards=rewards,
+            histories=histories,
+            task_ids=task_ids,
+            variant_seeds=variant_seeds,
+            curriculum_summary=curriculum_summary,
+            prompt_refreshes=prompt_refreshes,
+        )
+        metrics["batch_index"] = self.batch_index
+        metrics["monitoring_mode"] = (
+            "sentinel"
+            if any(task_id in SENTINEL_TASK_IDS for task_id in task_ids)
+            else "irt"
+        )
+
+        self.running_batch_count += 1
+        self.running_reward_total += metrics["reward_mean"]
+        self.best_reward_mean = max(self.best_reward_mean, metrics["reward_mean"])
+        metrics["running_reward_mean"] = round(
+            _safe_ratio(self.running_reward_total, self.running_batch_count),
+            4,
+        )
+        metrics["best_reward_mean"] = round(self.best_reward_mean, 4)
+
+        with self.metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(metrics, sort_keys=True))
+            handle.write("\n")
+
+        self.summary_path.write_text(
+            json.dumps(metrics, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return metrics
+
+
+class WarmStartDataset(TorchDataset):
+    """Simple causal-LM dataset for a short formatting/behavior warm-start."""
+
+    def __init__(self, texts: List[str], tokenizer, max_length: int = 1536) -> None:
+        self.examples: List[Dict[str, torch.Tensor]] = []
+        for text in texts:
+            encoded = tokenizer(
+                text,
+                truncation=True,
+                max_length=max_length,
+                padding="max_length",
+                return_tensors="pt",
+            )
+            example = {key: value.squeeze(0) for key, value in encoded.items()}
+            labels = example["input_ids"].clone()
+            labels[example["attention_mask"] == 0] = -100
+            example["labels"] = labels
+            self.examples.append(example)
+
+    def __len__(self) -> int:
+        return len(self.examples)
+
+    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
+        return self.examples[index]
+
+
+def _warm_start_counterfactual(obs, decision: Dict[str, Any]) -> str:
+    constitution = obs.constitutional_assessment or {}
+    violations = list((constitution.get("constitutional_violations") or {}).keys())
+    if decision.get("decision") == "APPROVE":
+        return "If approved, the proposal stays within the current safe operating envelope."
+    if violations:
+        return (
+            "If approved unchanged, this proposal would likely violate "
+            + ", ".join(violations)
+            + " and increase operational risk."
+        )
+    return "If approved unchanged, this proposal could bypass oversight without sufficient justification."
+
+
+def _warm_start_sentinel_decision_for_observation(obs) -> Dict[str, Any]:
+    decision = dict(_greedy_fallback_sentinel_decision(obs, []))
+    violations = sorted((obs.constitutional_assessment.get("constitutional_violations") or {}).keys())
+    decision.setdefault("worker_message", "Approved. Execute carefully and preserve evidence.")
+    decision.setdefault("required_evidence", [])
+    decision.setdefault("redirect_action", None)
+    decision.setdefault("reassign_to", None)
+    decision.setdefault("flag_severity", None)
+    decision.setdefault("suggested_action_type", None)
+    decision.setdefault("suggested_target", None)
+    decision.setdefault("suggested_parameters", {})
+    decision["constitutional_violations"] = violations
+    decision["counterfactual"] = _warm_start_counterfactual(obs, decision)
+    return decision
+
+
+def _build_warm_start_examples(
+    task_ids: List[str],
+    memory_context: str = "",
+    memory: Optional[Dict[str, Any]] = None,
+    feedback_memory: Optional[Dict[str, Any]] = None,
+    max_examples: int = WARM_START_DATASET_SIZE,
+    max_seeds: int = 3,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+
+    for task_id in task_ids:
+        for seed in range(max_seeds):
+            task_memory = _memory_context_for_task(memory, feedback_memory, task_id, memory_context)
+            if task_id in SENTINEL_TASK_IDS:
+                from sentinel.environment import SentinelEnv
+
+                env = SentinelEnv()
+                obs = env.reset(task_id=task_id, variant_seed=seed)
+                prompt = sentinel_obs_to_prompt(obs, task_id, task_memory)
+                response = _warm_start_sentinel_decision_for_observation(obs)
+            else:
+                from src.environment import IncidentResponseEnv
+
+                env = IncidentResponseEnv()
+                obs = env.reset(task_id=task_id, variant_seed=seed)
+                prompt = scenario_to_prompt(env._scenario, task_id, task_memory)  # type: ignore[attr-defined]
+                response = _greedy_fallback_action(env, obs, [])
+
+            records.append(
+                {
+                    "task_id": task_id,
+                    "variant_seed": seed,
+                    "text": prompt + json.dumps(response, sort_keys=True),
+                }
+            )
+            if len(records) >= max_examples:
+                return records
+
+    if records and len(records) < max_examples:
+        cycled: List[Dict[str, Any]] = []
+        index = 0
+        while len(records) + len(cycled) < max_examples:
+            source = dict(records[index % len(records)])
+            source["variant_seed"] = int(source.get("variant_seed", 0))
+            cycled.append(source)
+            index += 1
+        records.extend(cycled)
+
+    return records[:max_examples]
+
+
+def _run_small_warm_start(
+    model,
+    tokenizer,
+    prompt_state: AdaptivePromptState,
+) -> Dict[str, Any]:
+    from transformers import Trainer, TrainingArguments
+
+    output_dir = Path(WARM_START_OUTPUT_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    examples = _build_warm_start_examples(
+        task_ids=list(ACTIVE_TASK_IDS),
+        memory_context=prompt_state.memory_context,
+        memory=prompt_state.memory,
+        feedback_memory=prompt_state.feedback_memory,
+        max_examples=max(1, WARM_START_DATASET_SIZE),
+    )
+    if not examples:
+        raise RuntimeError("Warm-start requested, but no warm-start examples could be built.")
+
+    preview = [
+        {
+            "task_id": record["task_id"],
+            "variant_seed": record["variant_seed"],
+            "text_preview": str(record["text"])[:240],
+        }
+        for record in examples[:5]
+    ]
+    (output_dir / "dataset_preview.json").write_text(
+        json.dumps(preview, indent=2),
+        encoding="utf-8",
+    )
+
+    dataset = WarmStartDataset([record["text"] for record in examples], tokenizer)
+    args = TrainingArguments(
+        output_dir=str(output_dir),
+        overwrite_output_dir=True,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        learning_rate=WARM_START_LR,
+        max_steps=max(1, WARM_START_STEPS),
+        num_train_epochs=1,
+        logging_steps=1,
+        save_strategy="no",
+        remove_unused_columns=False,
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        report_to="wandb" if wandb_enabled else "none",
+    )
+    trainer = Trainer(model=model, args=args, train_dataset=dataset)
+    trainer.train()
+
+    final_dir = output_dir / "final"
+    trainer.save_model(str(final_dir))
+    tokenizer.save_pretrained(str(final_dir))
+    summary = {
+        "enabled": True,
+        "steps": max(1, WARM_START_STEPS),
+        "learning_rate": WARM_START_LR,
+        "dataset_size": len(examples),
+        "output_dir": str(output_dir),
+        "saved_model_path": str(final_dir),
+        "task_ids": list(ACTIVE_TASK_IDS),
+    }
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(
+        "Warm-start complete: steps=%d dataset=%d saved=%s",
+        summary["steps"],
+        summary["dataset_size"],
+        final_dir,
+    )
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1468,7 @@ def train():
     logger.info("LoRA r:     %d", LORA_R)
     logger.info("LLM panel:  %s", USE_LLM_PANEL)
     logger.info("Curriculum: %s", USE_CURRICULUM)
+    logger.info("Warm start: %s", WARM_START_STEPS if WARM_START_STEPS > 0 else "disabled")
     logger.info("Output:     %s", OUTPUT_DIR)
     logger.info("=" * 60)
 
@@ -1027,6 +1506,13 @@ def train():
         state=prompt_state,
         total_samples=PROMPT_DATASET_SIZE,
     )
+    training_monitor = TrainingMonitor(TRAIN_MONITOR_DIR)
+
+    warm_start_summary: Optional[Dict[str, Any]] = None
+    if WARM_START_STEPS > 0:
+        warm_start_summary = _run_small_warm_start(model, tokenizer, prompt_state)
+        if WARM_START_ONLY:
+            return warm_start_summary["saved_model_path"]
 
     # GRPO config
     from trl import GRPOConfig, GRPOTrainer
@@ -1046,8 +1532,8 @@ def train():
         save_total_limit            = 4,
         remove_unused_columns       = False,
         dataloader_num_workers      = 0,
-        bf16                        = torch.cuda.is_bf16_supported(),
-        fp16                        = not torch.cuda.is_bf16_supported(),
+        bf16                        = torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        fp16                        = torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
     )
@@ -1090,6 +1576,15 @@ def train():
         nonlocal feedback_memory
         feedback_memory = prompt_state.feedback_memory
 
+        monitor_summary = training_monitor.log_batch(
+            rewards=rewards,
+            histories=histories,
+            task_ids=[str(task_id) for task_id in t_ids],
+            variant_seeds=[int(seed) for seed in v_seeds],
+            curriculum_summary=curriculum.summary() if curriculum else None,
+            prompt_refreshes=prompt_state.prompt_refreshes,
+        )
+
         if curriculum and curriculum.should_use_adversarial():
             logger.info(
                 "Adversarial trigger: tier=%d mean=%.2f",
@@ -1117,6 +1612,26 @@ def train():
                     logger.info("Generated %d adversarial scenarios", len(new_scenarios))
             except Exception as e:
                 logger.debug("Adversarial generation failed: %s", e)
+
+        if wandb_enabled:
+            import wandb
+
+            wandb_payload = {
+                "monitor/reward_mean": monitor_summary["reward_mean"],
+                "monitor/avg_steps": monitor_summary["avg_steps"],
+                "monitor/running_reward_mean": monitor_summary["running_reward_mean"],
+                "monitor/best_reward_mean": monitor_summary["best_reward_mean"],
+            }
+            if USE_SENTINEL:
+                wandb_payload.update(
+                    {
+                        "monitor/detection_rate": monitor_summary.get("detection_rate", 0.0),
+                        "monitor/false_positive_rate": monitor_summary.get("false_positive_rate", 0.0),
+                        "monitor/risk_reduction_rate": monitor_summary.get("risk_reduction_rate", 0.0),
+                        "monitor/worker_rehabilitation_rate": monitor_summary.get("worker_rehabilitation_rate", 0.0),
+                    }
+                )
+            wandb.log(wandb_payload)
 
         return rewards
 
@@ -1148,6 +1663,8 @@ def train():
     save_agent_memory(memory)
     if USE_SENTINEL:
         save_feedback_memory(feedback_memory, SENTINEL_FEEDBACK_MEMORY_PATH)
+    if warm_start_summary:
+        logger.info("Warm-start summary: %s", warm_start_summary)
 
     # Plot reward curve
     _plot_reward_curve()
@@ -1176,20 +1693,33 @@ def _plot_reward_curve():
     try:
         import matplotlib.pyplot as plt
 
-        log_path = os.path.join(OUTPUT_DIR, "train.log")
-        if not os.path.exists(log_path):
-            return
-
         steps, rewards = [], []
-        with open(log_path) as f:
-            for line in f:
-                if "Batch rewards: mean=" in line:
+        monitor_path = Path(TRAIN_MONITOR_DIR) / "training_metrics.jsonl"
+        if monitor_path.exists():
+            with monitor_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
                     try:
-                        mean_str = line.split("mean=")[1].split(" ")[0]
-                        steps.append(len(steps) + 1)
-                        rewards.append(float(mean_str))
-                    except Exception:
-                        pass
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    steps.append(int(payload.get("batch_index", len(steps) + 1)))
+                    rewards.append(float(payload.get("reward_mean", 0.0)))
+        else:
+            log_path = os.path.join(OUTPUT_DIR, "train.log")
+            if not os.path.exists(log_path):
+                return
+            with open(log_path, encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "Batch rewards: mean=" in line:
+                        try:
+                            mean_str = line.split("mean=")[1].split(" ")[0]
+                            steps.append(len(steps) + 1)
+                            rewards.append(float(mean_str))
+                        except Exception:
+                            pass
 
         if not steps:
             return
@@ -1234,6 +1764,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr",          type=float, default=LR,              help="Learning rate")
     parser.add_argument("--output",      type=str,   default=OUTPUT_DIR,      help="Output directory")
     parser.add_argument("--resume",      type=str,   default=RESUME_FROM,     help="Checkpoint to resume from")
+    parser.add_argument("--warm-start-steps", type=int, default=WARM_START_STEPS, help="Optional small SFT-style warm-start steps before GRPO")
+    parser.add_argument("--warm-start-only", action="store_true", help="Run only the warm-start stage and stop before GRPO")
     parser.add_argument("--dry-run",     action="store_true",                 help="Validate setup without training")
     args = parser.parse_args()
 
@@ -1243,6 +1775,8 @@ if __name__ == "__main__":
     LR           = args.lr
     OUTPUT_DIR   = args.output
     RESUME_FROM  = args.resume
+    WARM_START_STEPS = args.warm_start_steps
+    WARM_START_ONLY = args.warm_start_only or WARM_START_ONLY
 
     if args.dry_run:
         logger.info("DRY RUN: Validating environment and reward function...")
@@ -1263,7 +1797,19 @@ if __name__ == "__main__":
                 grade = env.grade()
                 score = float(grade.score) if hasattr(grade, "score") else float(grade.get("score", 0.0))
                 logger.info("  task=%s initial_grade=%.3f", task_id, score)
-        
+
+        if WARM_START_STEPS > 0:
+            from training.memory import load_agent_memory
+            from sentinel.feedback import load_feedback_memory
+
+            warm_start_records = _build_warm_start_examples(
+                task_ids=list(ACTIVE_TASK_IDS),
+                memory=load_agent_memory(),
+                feedback_memory=load_feedback_memory(SENTINEL_FEEDBACK_MEMORY_PATH),
+                max_examples=max(1, min(WARM_START_DATASET_SIZE, 8)),
+            )
+            logger.info("  warm_start_examples=%d", len(warm_start_records))
+
         logger.info("DRY RUN PASSED. Environment is working.")
         sys.exit(0)
 

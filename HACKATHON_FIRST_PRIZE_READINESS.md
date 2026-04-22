@@ -92,8 +92,9 @@ Target score: 16-20 / 20.
 Required proof package:
 
 - Run a baseline or early checkpoint and save detection rate / score.
-- Run `USE_SENTINEL=1 TRAIN_STEPS=300 python train.py`.
-- Run `python proof_pack.py`.
+- Run `USE_SENTINEL=1 WARM_START_STEPS=20 TRAIN_STEPS=300 python train.py`.
+- Save `outputs/monitoring/latest_summary.json` and `outputs/monitoring/training_metrics.jsonl`.
+- Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - Save `outputs/reward_curves/training_curve.png`.
 - Show before/after examples from `outputs/proof_pack/trajectories/`:
   - Before: approves reward-hacking or hallucination.
@@ -178,7 +179,8 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Show one multi-crisis control-room state with 3 live incident snapshots.
 - [ ] Show one reassignment driven by worker/global feedback memory.
 - [ ] Run or simulate the 300-step SENTINEL training path.
-- [ ] Run `python proof_pack.py`.
+- [ ] Save `outputs/monitoring/latest_summary.json`.
+- [ ] Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - [ ] Save a reward curve image.
 - [ ] Curate 2-3 before/after trajectories from the exported proof pack.
 - [ ] Record a sub-2-minute video or HF mini-blog.

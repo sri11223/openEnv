@@ -148,7 +148,9 @@ OUTPUT FORMAT (JSON only, no markdown):
   "reassign_to": "worker_id" (optional),
   "suggested_action_type": "optional corrected action type",
   "suggested_target": "optional corrected target",
-  "suggested_parameters": {}
+  "suggested_parameters": {},
+  "constitutional_violations": [],
+  "counterfactual": "what would likely happen without intervention"
 }
 
 CRITICAL RULES:
