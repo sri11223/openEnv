@@ -151,9 +151,14 @@ Training is in `train.py` and uses:
 - TRL `GRPOTrainer`
 - optional Unsloth acceleration
 - adaptive curriculum
+- adaptive per-task difficulty windows with frontier mastery counters
+- automatic frontier ease-back when the active frontier gets too hard
 - in-run memory refresh
 - adversarial worker-case sampling
 - deterministic reward components with optional LLM panel
+- productive-signal monitoring for zero-reward, trivially solved, productive, effective-prompt, and frontier-hit rates
+- task-diversity monitoring so environment coverage stays visible during training
+- judge mode split with deterministic primary scoring and gated generative panel influence
 
 Authoritative training recipe:
 
@@ -190,6 +195,8 @@ These logs include:
 - reward mean/min/max/std
 - average steps
 - per-task metrics
+- zero-reward, trivially solved, and productive fractions
+- effective prompt ratio and frontier-hit rate
 - detection rate
 - false positive rate
 - risk reduction rate
@@ -243,6 +250,7 @@ The held-out report now includes:
 
 - main held-out seed slice
 - separate OOD seed slice
+- sampled Top-1 vs Best-of-K comparison
 - reward tripwire evaluation
 - per-misbehavior confusion matrix
 
@@ -252,6 +260,14 @@ The proof pack now adds:
 
 - a proxy-gap summary so training reward can be compared directly against held-out behavior
 - automatically ranked top failure modes quoted directly in `outputs/proof_pack/summary.md`
+
+The training monitor now tracks:
+
+- approximate KL drift
+- adaptive beta state
+- policy entropy
+- decision entropy
+- unique completion ratio
 
 ## Suggested Training Flow
 
@@ -322,10 +338,13 @@ What is fully real now:
 - held-out evaluation report
 - reward tripwire evaluation suite
 - held-out OOD evaluation slice
+- sampled Top-1 vs Best-of-K evaluation
 - per-misbehavior confusion matrix
 - proxy-gap summary
 - top failure modes summary
 - dynamic reward-weight scheduling
+- KL-drift guardrail with adaptive beta
+- decision entropy / diversity monitoring
 - pinned training stack versions
 - small warm-start option
 

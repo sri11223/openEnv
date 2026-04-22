@@ -52,6 +52,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset as TorchDataset
+from transformers import TrainerCallback
+from training.curriculum import CURRICULUM_FRONTIER_FAILURE_RATE
 
 # ---------------------------------------------------------------------------
 # Config from env vars
@@ -93,6 +95,18 @@ ROLLOUT_AUDIT_DIR = os.getenv("ROLLOUT_AUDIT_DIR", os.path.join(TRAIN_MONITOR_DI
 ROLLOUT_AUDIT_EVERY = int(os.getenv("ROLLOUT_AUDIT_EVERY", "10"))
 ROLLOUT_AUDIT_SAMPLES = int(os.getenv("ROLLOUT_AUDIT_SAMPLES", "2"))
 REWARD_SCHEDULE_MODE = os.getenv("REWARD_SCHEDULE_MODE", "dynamic")
+KL_TARGET = float(os.getenv("KL_TARGET", "0.08"))
+KL_ADAPTIVE = os.getenv("KL_ADAPTIVE", "1") == "1"
+KL_LOW_FACTOR = float(os.getenv("KL_LOW_FACTOR", "1.5"))
+KL_HIGH_FACTOR = float(os.getenv("KL_HIGH_FACTOR", "1.5"))
+KL_BETA_UP_MULT = float(os.getenv("KL_BETA_UP_MULT", "2.0"))
+KL_BETA_DOWN_MULT = float(os.getenv("KL_BETA_DOWN_MULT", "0.5"))
+KL_MIN_BETA = float(os.getenv("KL_MIN_BETA", "0.005"))
+KL_MAX_BETA = float(os.getenv("KL_MAX_BETA", "0.5"))
+KL_HARD_STOP_ENABLED = os.getenv("KL_HARD_STOP_ENABLED", "0") == "1"
+KL_HARD_STOP_MULT = float(os.getenv("KL_HARD_STOP_MULT", "3.0"))
+ZERO_SIGNAL_REWARD_THRESHOLD = float(os.getenv("ZERO_SIGNAL_REWARD_THRESHOLD", "0.05"))
+TRIVIAL_REWARD_THRESHOLD = float(os.getenv("TRIVIAL_REWARD_THRESHOLD", "0.95"))
 
 TASK_IDS = [
     "severity_classification",
@@ -144,6 +158,26 @@ def collect_training_stack_versions() -> Dict[str, Any]:
         "train_steps": TRAIN_STEPS,
         "warm_start_steps": WARM_START_STEPS,
         "reward_schedule_mode": REWARD_SCHEDULE_MODE,
+        "productive_signal_thresholds": {
+            "zero_signal_reward_threshold": ZERO_SIGNAL_REWARD_THRESHOLD,
+            "trivial_reward_threshold": TRIVIAL_REWARD_THRESHOLD,
+        },
+        "adaptive_curriculum": {
+            "frontier_failure_rate": CURRICULUM_FRONTIER_FAILURE_RATE,
+        },
+        "kl_control": {
+            "initial_beta": KL_COEF,
+            "target": KL_TARGET,
+            "adaptive": KL_ADAPTIVE,
+            "low_factor": KL_LOW_FACTOR,
+            "high_factor": KL_HIGH_FACTOR,
+            "beta_up_mult": KL_BETA_UP_MULT,
+            "beta_down_mult": KL_BETA_DOWN_MULT,
+            "min_beta": KL_MIN_BETA,
+            "max_beta": KL_MAX_BETA,
+            "hard_stop_enabled": KL_HARD_STOP_ENABLED,
+            "hard_stop_mult": KL_HARD_STOP_MULT,
+        },
         "packages": {
             "torch": getattr(torch, "__version__", "missing"),
             "bitsandbytes": _package_version("bitsandbytes"),
@@ -628,6 +662,106 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return float(numerator) / float(denominator)
 
 
+def _normalize_completion_text(text: str) -> str:
+    return " ".join(str(text or "").strip().split())
+
+
+def _extract_completion_choice(text: str) -> str:
+    payload = _parse_action(str(text or "")) or {}
+    choice = payload.get("decision") or payload.get("action") or payload.get("action_type") or ""
+    return str(choice).upper()
+
+
+def _shannon_entropy_from_labels(labels: List[str]) -> float:
+    usable = [label for label in labels if label]
+    if not usable:
+        return 0.0
+    total = float(len(usable))
+    counts: Dict[str, int] = {}
+    for label in usable:
+        counts[label] = counts.get(label, 0) + 1
+    entropy = 0.0
+    for count in counts.values():
+        p = count / total
+        entropy -= p * math.log(p, 2)
+    return float(entropy)
+
+
+def _completion_diversity_metrics(completions: Optional[List[str]]) -> Dict[str, Any]:
+    if not completions:
+        return {
+            "unique_completion_ratio": 0.0,
+            "decision_entropy": 0.0,
+            "decision_variety": 0,
+            "decision_distribution": {},
+        }
+
+    normalized = [_normalize_completion_text(text) for text in completions]
+    unique_ratio = _safe_ratio(len(set(normalized)), len(normalized))
+    decisions = [_extract_completion_choice(text) for text in completions]
+    decision_counts: Dict[str, int] = {}
+    for choice in decisions:
+        key = choice or "UNPARSED"
+        decision_counts[key] = decision_counts.get(key, 0) + 1
+    total = float(sum(decision_counts.values()) or 1.0)
+    decision_distribution = {
+        key: round(value / total, 4)
+        for key, value in sorted(decision_counts.items(), key=lambda item: item[0])
+    }
+    return {
+        "unique_completion_ratio": round(unique_ratio, 4),
+        "decision_entropy": round(_shannon_entropy_from_labels(decisions), 4),
+        "decision_variety": len(decision_counts),
+        "decision_distribution": decision_distribution,
+    }
+
+
+def _frontier_scenario_keys(curriculum_summary: Optional[Dict[str, Any]]) -> set[Tuple[str, int]]:
+    if not curriculum_summary:
+        return set()
+    adaptive = curriculum_summary.get("adaptive_difficulty") or {}
+    frontier_scenarios = adaptive.get("frontier_scenarios") or []
+    resolved = set()
+    for item in frontier_scenarios:
+        try:
+            resolved.add((str(item.get("task_id")), int(item.get("variant_seed", 0))))
+        except (TypeError, ValueError):
+            continue
+    return resolved
+
+
+def _productive_signal_metrics(
+    rewards: List[float],
+    task_ids: List[str],
+    variant_seeds: List[int],
+    curriculum_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    reward_values = [float(value) for value in rewards]
+    frontier_keys = _frontier_scenario_keys(curriculum_summary)
+    zero_signal = sum(1 for reward in reward_values if reward <= ZERO_SIGNAL_REWARD_THRESHOLD)
+    trivial = sum(1 for reward in reward_values if reward >= TRIVIAL_REWARD_THRESHOLD)
+    productive = max(0, len(reward_values) - zero_signal - trivial)
+    frontier_hits = sum(
+        1
+        for task_id, variant_seed in zip(task_ids, variant_seeds)
+        if (str(task_id), int(variant_seed)) in frontier_keys
+    )
+    active_task_ids = list((curriculum_summary or {}).get("active_task_ids") or [])
+    task_diversity_ratio = _safe_ratio(len(set(task_ids)), len(active_task_ids) or len(set(task_ids)) or 1)
+    payload = {
+        "zero_reward_fraction": round(_safe_ratio(zero_signal, len(reward_values)), 4),
+        "trivially_solved_fraction": round(_safe_ratio(trivial, len(reward_values)), 4),
+        "productive_fraction": round(_safe_ratio(productive, len(reward_values)), 4),
+        "effective_prompt_ratio": round(_safe_ratio(productive, len(reward_values)), 4),
+        "frontier_hit_rate": round(_safe_ratio(frontier_hits, len(reward_values)), 4),
+        "task_diversity_ratio": round(task_diversity_ratio, 4),
+        "frontier_hit_count": frontier_hits,
+    }
+    if not frontier_keys and curriculum_summary and curriculum_summary.get("frontier_hit_rate") is not None:
+        payload["frontier_hit_rate"] = float(curriculum_summary.get("frontier_hit_rate", 0.0))
+    return payload
+
+
 def _summarize_sentinel_history(history: List[Dict[str, Any]]) -> Dict[str, float]:
     audits = [entry.get("audit") or {} for entry in history if entry.get("audit")]
     misbehaviors = sum(1 for audit in audits if audit.get("was_misbehavior"))
@@ -687,11 +821,19 @@ def _aggregate_batch_metrics(
     histories: List[List[Dict[str, Any]]],
     task_ids: List[str],
     variant_seeds: List[int],
+    completions: Optional[List[str]] = None,
     curriculum_summary: Optional[Dict[str, Any]] = None,
     prompt_refreshes: int = 0,
 ) -> Dict[str, Any]:
     is_sentinel_batch = any(task_id in SENTINEL_TASK_IDS for task_id in task_ids)
     safe_rewards = [float(r) for r in rewards]
+    productive_metrics = _productive_signal_metrics(
+        rewards=safe_rewards,
+        task_ids=task_ids,
+        variant_seeds=variant_seeds,
+        curriculum_summary=curriculum_summary,
+    )
+    frontier_keys = _frontier_scenario_keys(curriculum_summary)
     reward_mean = float(np.mean(safe_rewards)) if safe_rewards else 0.0
     reward_min = float(np.min(safe_rewards)) if safe_rewards else 0.0
     reward_max = float(np.max(safe_rewards)) if safe_rewards else 0.0
@@ -718,12 +860,24 @@ def _aggregate_batch_metrics(
                 "revision_successes": 0.0,
                 "prevented_damage_total": 0.0,
                 "allowed_damage_total": 0.0,
+                "zero_reward_count": 0,
+                "trivial_reward_count": 0,
+                "productive_count": 0,
+                "frontier_hits": 0,
             },
         )
         bucket["count"] += 1
         bucket["reward_values"].append(float(reward))
         bucket["step_values"].append(len(history))
         bucket["variant_seeds"].add(variant_seed)
+        if reward <= ZERO_SIGNAL_REWARD_THRESHOLD:
+            bucket["zero_reward_count"] += 1
+        elif reward >= TRIVIAL_REWARD_THRESHOLD:
+            bucket["trivial_reward_count"] += 1
+        else:
+            bucket["productive_count"] += 1
+        if (str(task_id), int(variant_seed)) in frontier_keys:
+            bucket["frontier_hits"] += 1
 
         if is_sentinel_batch:
             rollup = _summarize_sentinel_history(history)
@@ -745,6 +899,10 @@ def _aggregate_batch_metrics(
             "reward_mean": round(float(np.mean(bucket["reward_values"])), 4) if bucket["reward_values"] else 0.0,
             "avg_steps": round(float(np.mean(bucket["step_values"])), 4) if bucket["step_values"] else 0.0,
             "variant_seeds": sorted(bucket["variant_seeds"]),
+            "zero_reward_fraction": round(_safe_ratio(bucket["zero_reward_count"], bucket["count"]), 4),
+            "trivially_solved_fraction": round(_safe_ratio(bucket["trivial_reward_count"], bucket["count"]), 4),
+            "productive_fraction": round(_safe_ratio(bucket["productive_count"], bucket["count"]), 4),
+            "frontier_hit_rate": round(_safe_ratio(bucket["frontier_hits"], bucket["count"]), 4),
         }
         if is_sentinel_batch:
             task_summary.update(
@@ -794,6 +952,8 @@ def _aggregate_batch_metrics(
         "per_task": per_task,
         "curriculum": curriculum_summary or {},
     }
+    payload.update(_completion_diversity_metrics(completions))
+    payload.update(productive_metrics)
 
     if is_sentinel_batch:
         overall = {
@@ -848,16 +1008,35 @@ class TrainingMonitor:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_path = self.output_dir / "training_metrics.jsonl"
+        self.stability_path = self.output_dir / "training_stability.jsonl"
         self.summary_path = self.output_dir / "latest_summary.json"
         self.stack_path = self.output_dir / "training_stack_versions.json"
         self.batch_index = 0
         self.running_reward_total = 0.0
         self.running_batch_count = 0
         self.best_reward_mean = float("-inf")
+        self.latest_batch_metrics: Dict[str, Any] = {}
+        self.latest_trainer_metrics: Dict[str, Any] = {}
+        self.latest_guardrail: Dict[str, Any] = {}
 
     def write_stack_versions(self, stack_versions: Dict[str, Any]) -> None:
         self.stack_path.write_text(
             json.dumps(stack_versions, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def _write_latest_summary(self) -> None:
+        payload = dict(self.latest_batch_metrics)
+        if self.latest_trainer_metrics:
+            payload.update(self.latest_trainer_metrics)
+            payload["trainer_metrics"] = dict(self.latest_trainer_metrics)
+        if self.latest_guardrail:
+            payload["kl_guardrail"] = dict(self.latest_guardrail)
+            payload["adaptive_beta"] = self.latest_guardrail.get("current_beta")
+        if not payload:
+            return
+        self.summary_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
 
@@ -867,6 +1046,7 @@ class TrainingMonitor:
         histories: List[List[Dict[str, Any]]],
         task_ids: List[str],
         variant_seeds: List[int],
+        completions: Optional[List[str]],
         curriculum_summary: Optional[Dict[str, Any]],
         prompt_refreshes: int,
         reward_schedule: Optional[Dict[str, Any]] = None,
@@ -877,6 +1057,7 @@ class TrainingMonitor:
             histories=histories,
             task_ids=task_ids,
             variant_seeds=variant_seeds,
+            completions=completions,
             curriculum_summary=curriculum_summary,
             prompt_refreshes=prompt_refreshes,
         )
@@ -902,11 +1083,153 @@ class TrainingMonitor:
             handle.write(json.dumps(metrics, sort_keys=True))
             handle.write("\n")
 
-        self.summary_path.write_text(
-            json.dumps(metrics, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        self.latest_batch_metrics = dict(metrics)
+        self._write_latest_summary()
         return metrics
+
+    def log_trainer_metrics(
+        self,
+        *,
+        global_step: int,
+        trainer_metrics: Dict[str, Any],
+        guardrail: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "global_step": int(global_step),
+            **trainer_metrics,
+        }
+        if guardrail:
+            payload["kl_guardrail"] = guardrail
+        with self.stability_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True))
+            handle.write("\n")
+
+        self.latest_trainer_metrics = dict(trainer_metrics)
+        if guardrail:
+            self.latest_guardrail = dict(guardrail)
+        self._write_latest_summary()
+        return payload
+
+
+class GRPOStabilityCallback(TrainerCallback):
+    """Hook TRL trainer logs to persist KL/entropy metrics and adapt beta conservatively."""
+
+    def __init__(
+        self,
+        training_monitor: TrainingMonitor,
+        *,
+        initial_beta: float,
+        target_kl: float,
+        adaptive: bool,
+        low_factor: float,
+        high_factor: float,
+        beta_up_mult: float,
+        beta_down_mult: float,
+        min_beta: float,
+        max_beta: float,
+        hard_stop_enabled: bool,
+        hard_stop_mult: float,
+    ) -> None:
+        self.training_monitor = training_monitor
+        self.current_beta = float(initial_beta)
+        self.target_kl = float(target_kl)
+        self.adaptive = bool(adaptive)
+        self.low_factor = float(low_factor)
+        self.high_factor = float(high_factor)
+        self.beta_up_mult = float(beta_up_mult)
+        self.beta_down_mult = float(beta_down_mult)
+        self.min_beta = float(min_beta)
+        self.max_beta = float(max_beta)
+        self.hard_stop_enabled = bool(hard_stop_enabled)
+        self.hard_stop_mult = float(hard_stop_mult)
+        self.trainer = None
+
+    def bind_trainer(self, trainer) -> None:
+        self.trainer = trainer
+        self.current_beta = float(getattr(trainer, "beta", self.current_beta) or self.current_beta)
+
+    @staticmethod
+    def _first_float(logs: Dict[str, Any], keys: List[str]) -> Optional[float]:
+        for key in keys:
+            value = logs.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _apply_beta(self, value: float) -> None:
+        if self.trainer is None:
+            self.current_beta = float(value)
+            return
+        self.current_beta = float(value)
+        setattr(self.trainer, "beta", self.current_beta)
+        if hasattr(self.trainer, "args"):
+            if hasattr(self.trainer.args, "beta"):
+                setattr(self.trainer.args, "beta", self.current_beta)
+            if hasattr(self.trainer.args, "kl_coef"):
+                setattr(self.trainer.args, "kl_coef", self.current_beta)
+
+    def _guardrail_update(self, approx_kl: Optional[float]):
+        low_threshold = self.target_kl / max(self.low_factor, 1.0)
+        high_threshold = self.target_kl * max(self.high_factor, 1.0)
+        guardrail = {
+            "enabled": self.adaptive,
+            "target_kl": round(self.target_kl, 4),
+            "low_threshold": round(low_threshold, 4),
+            "high_threshold": round(high_threshold, 4),
+            "previous_beta": round(self.current_beta, 6),
+            "current_beta": round(self.current_beta, 6),
+            "action": "hold",
+            "hard_stop_triggered": False,
+        }
+        if approx_kl is None:
+            return guardrail
+
+        new_beta = self.current_beta
+        if self.adaptive and approx_kl > high_threshold:
+            new_beta = min(self.max_beta, self.current_beta * self.beta_up_mult)
+            guardrail["action"] = "increase_beta"
+        elif self.adaptive and approx_kl < low_threshold:
+            new_beta = max(self.min_beta, self.current_beta * self.beta_down_mult)
+            guardrail["action"] = "decrease_beta"
+
+        if abs(new_beta - self.current_beta) > 1e-12:
+            self._apply_beta(new_beta)
+            guardrail["current_beta"] = round(self.current_beta, 6)
+
+        if self.hard_stop_enabled and approx_kl > self.target_kl * max(self.hard_stop_mult, 1.0):
+            guardrail["hard_stop_triggered"] = True
+            guardrail["action"] = "hard_stop"
+        return guardrail
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        logs = logs or {}
+        if any(str(key).startswith("eval_") for key in logs):
+            return control
+
+        approx_kl = self._first_float(logs, ["kl", "objective/kl"])
+        policy_entropy = self._first_float(logs, ["entropy", "policy/entropy"])
+        clip_ratio = self._first_float(logs, ["clip_ratio/region_mean", "clip_ratio", "objective/clip_ratio"])
+        if approx_kl is None and policy_entropy is None and clip_ratio is None:
+            return control
+
+        guardrail = self._guardrail_update(approx_kl)
+        trainer_metrics = {
+            "approx_kl": round(float(approx_kl), 6) if approx_kl is not None else None,
+            "policy_entropy": round(float(policy_entropy), 6) if policy_entropy is not None else None,
+            "clip_ratio": round(float(clip_ratio), 6) if clip_ratio is not None else None,
+        }
+        self.training_monitor.log_trainer_metrics(
+            global_step=int(getattr(state, "global_step", 0) or 0),
+            trainer_metrics={key: value for key, value in trainer_metrics.items() if value is not None},
+            guardrail=guardrail,
+        )
+        if guardrail.get("hard_stop_triggered"):
+            control.should_training_stop = True
+        return control
 
 
 def _truncate_text(text: str, limit: int = 700) -> str:
@@ -1005,6 +1328,22 @@ class RolloutAuditSampler:
             f"- Reward mean: {monitor_summary.get('reward_mean', 0.0):.4f}",
             f"- Running reward mean: {monitor_summary.get('running_reward_mean', 0.0):.4f}",
         ]
+        if "approx_kl" in monitor_summary:
+            lines.append(f"- Approx KL: {monitor_summary.get('approx_kl', 0.0):.6f}")
+        if "adaptive_beta" in monitor_summary:
+            lines.append(f"- Adaptive beta: {monitor_summary.get('adaptive_beta', 0.0):.6f}")
+        if "policy_entropy" in monitor_summary:
+            lines.append(f"- Policy entropy: {monitor_summary.get('policy_entropy', 0.0):.6f}")
+        if "decision_entropy" in monitor_summary:
+            lines.append(f"- Decision entropy: {monitor_summary.get('decision_entropy', 0.0):.4f}")
+        if "unique_completion_ratio" in monitor_summary:
+            lines.append(f"- Unique completion ratio: {monitor_summary.get('unique_completion_ratio', 0.0):.4f}")
+        if "effective_prompt_ratio" in monitor_summary:
+            lines.append(f"- Effective prompt ratio: {monitor_summary.get('effective_prompt_ratio', 0.0):.4f}")
+        if "frontier_hit_rate" in monitor_summary:
+            lines.append(f"- Frontier hit rate: {monitor_summary.get('frontier_hit_rate', 0.0):.4f}")
+        if "task_diversity_ratio" in monitor_summary:
+            lines.append(f"- Task diversity ratio: {monitor_summary.get('task_diversity_ratio', 0.0):.4f}")
         if reward_schedule:
             lines.append(
                 f"- Reward schedule: {reward_schedule.get('stage', 'unknown')} ({reward_schedule.get('mode', 'unknown')})"
@@ -1669,6 +2008,14 @@ def train():
     logger.info("Warm start: %s", WARM_START_STEPS if WARM_START_STEPS > 0 else "disabled")
     logger.info("Reward schedule: %s", REWARD_SCHEDULE_MODE if USE_SENTINEL else "n/a")
     logger.info(
+        "KL control: target=%s adaptive=%s beta=%s [%s, %s]",
+        KL_TARGET,
+        KL_ADAPTIVE,
+        KL_COEF,
+        KL_MIN_BETA,
+        KL_MAX_BETA,
+    )
+    logger.info(
         "Rollout audit: every %s batch(es), %s sample(s)",
         ROLLOUT_AUDIT_EVERY if ROLLOUT_AUDIT_EVERY > 0 else "disabled",
         ROLLOUT_AUDIT_SAMPLES,
@@ -1755,6 +2102,7 @@ def train():
         t_ids   = kwargs.get("task_id", [ACTIVE_TASK_IDS[0]] * len(prompts))
         v_seeds = kwargs.get("variant_seed", [0] * len(prompts))
         adv_cases = kwargs.get("adversarial_case", [""] * len(prompts))
+        curriculum_snapshot = curriculum.summary() if curriculum else None
         reward_schedule: Optional[Dict[str, Any]] = None
         if USE_SENTINEL:
             current_batch_index = training_monitor.batch_index + 1
@@ -1801,7 +2149,8 @@ def train():
             histories=histories,
             task_ids=[str(task_id) for task_id in t_ids],
             variant_seeds=[int(seed) for seed in v_seeds],
-            curriculum_summary=curriculum.summary() if curriculum else None,
+            completions=[str(completion) for completion in completions],
+            curriculum_summary=curriculum_snapshot,
             prompt_refreshes=prompt_state.prompt_refreshes,
             reward_schedule=reward_schedule,
         )
@@ -1853,6 +2202,15 @@ def train():
                 "monitor/avg_steps": monitor_summary["avg_steps"],
                 "monitor/running_reward_mean": monitor_summary["running_reward_mean"],
                 "monitor/best_reward_mean": monitor_summary["best_reward_mean"],
+                "monitor/unique_completion_ratio": monitor_summary.get("unique_completion_ratio", 0.0),
+                "monitor/decision_entropy": monitor_summary.get("decision_entropy", 0.0),
+                "monitor/decision_variety": monitor_summary.get("decision_variety", 0),
+                "monitor/zero_reward_fraction": monitor_summary.get("zero_reward_fraction", 0.0),
+                "monitor/trivially_solved_fraction": monitor_summary.get("trivially_solved_fraction", 0.0),
+                "monitor/productive_fraction": monitor_summary.get("productive_fraction", 0.0),
+                "monitor/effective_prompt_ratio": monitor_summary.get("effective_prompt_ratio", 0.0),
+                "monitor/frontier_hit_rate": monitor_summary.get("frontier_hit_rate", 0.0),
+                "monitor/task_diversity_ratio": monitor_summary.get("task_diversity_ratio", 0.0),
             }
             if USE_SENTINEL:
                 wandb_payload.update(
@@ -1884,6 +2242,22 @@ def train():
         train_dataset    = train_dataset,
         reward_funcs     = [reward_fn_with_curriculum],
     )
+    stability_callback = GRPOStabilityCallback(
+        training_monitor=training_monitor,
+        initial_beta=KL_COEF,
+        target_kl=KL_TARGET,
+        adaptive=KL_ADAPTIVE,
+        low_factor=KL_LOW_FACTOR,
+        high_factor=KL_HIGH_FACTOR,
+        beta_up_mult=KL_BETA_UP_MULT,
+        beta_down_mult=KL_BETA_DOWN_MULT,
+        min_beta=KL_MIN_BETA,
+        max_beta=KL_MAX_BETA,
+        hard_stop_enabled=KL_HARD_STOP_ENABLED,
+        hard_stop_mult=KL_HARD_STOP_MULT,
+    )
+    trainer.add_callback(stability_callback)
+    stability_callback.bind_trainer(trainer)
 
     # Train
     logger.info("Starting training...")

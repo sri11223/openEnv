@@ -76,6 +76,7 @@ SENTINEL_PROOF_SYSTEM_PROMPT = (
 class PolicySpec:
     name: str
     policy: Callable[[Any], Dict[str, Any]]
+    sample_policy: Callable[[Any, int, float], List[Dict[str, Any]]]
     kind: str
     checkpoint: Optional[str] = None
 
@@ -170,19 +171,34 @@ class _CheckpointPolicy:
             )
         self._model.eval()
 
-    def __call__(self, obs) -> Dict[str, Any]:
+    def _generate_decision(
+        self,
+        obs,
+        *,
+        do_sample: bool,
+        temperature: float,
+    ) -> Dict[str, Any]:
         prompt = _render_model_prompt(obs)
         device = next(self._model.parameters()).device
         encoded = self._tokenizer(prompt, return_tensors="pt")
         encoded = {key: value.to(device) for key, value in encoded.items()}
+        generation_kwargs = {
+            "max_new_tokens": 256,
+            "do_sample": bool(do_sample),
+            "pad_token_id": self._tokenizer.pad_token_id,
+            "eos_token_id": self._tokenizer.eos_token_id,
+        }
+        if do_sample:
+            generation_kwargs.update(
+                {
+                    "temperature": max(0.1, float(temperature)),
+                    "top_p": 0.95,
+                }
+            )
         with self._torch.no_grad():
             generated = self._model.generate(
                 **encoded,
-                max_new_tokens=256,
-                do_sample=False,
-                temperature=0.0,
-                pad_token_id=self._tokenizer.pad_token_id,
-                eos_token_id=self._tokenizer.eos_token_id,
+                **generation_kwargs,
             )
         completion_ids = generated[0][encoded["input_ids"].shape[1]:]
         text = self._tokenizer.decode(completion_ids, skip_special_tokens=True)
@@ -198,6 +214,27 @@ class _CheckpointPolicy:
             "constitutional_violations": [],
         }
 
+    def __call__(self, obs) -> Dict[str, Any]:
+        return self._generate_decision(obs, do_sample=False, temperature=0.0)
+
+    def sample(self, obs, num_samples: int = 1, temperature: float = 0.8) -> List[Dict[str, Any]]:
+        count = max(1, int(num_samples))
+        if count == 1:
+            return [self.__call__(obs)]
+        return [
+            self._generate_decision(obs, do_sample=True, temperature=temperature)
+            for _ in range(count)
+        ]
+
+
+def _repeat_policy_samples(
+    policy: Callable[[Any], Dict[str, Any]],
+) -> Callable[[Any, int, float], List[Dict[str, Any]]]:
+    def _sampler(obs, num_samples: int = 1, temperature: float = 0.8) -> List[Dict[str, Any]]:
+        return [policy(obs) for _ in range(max(1, int(num_samples)))]
+
+    return _sampler
+
 
 def _resolve_policy_spec(
     *,
@@ -210,15 +247,18 @@ def _resolve_policy_spec(
     if checkpoint:
         checkpoint_path = str(Path(checkpoint))
         resolved_label = label or Path(checkpoint_path).name
+        checkpoint_policy = _CheckpointPolicy(checkpoint_path, base_model=base_model)
         return PolicySpec(
             name=resolved_label,
-            policy=_CheckpointPolicy(checkpoint_path, base_model=base_model),
+            policy=checkpoint_policy,
+            sample_policy=checkpoint_policy.sample,
             kind="checkpoint",
             checkpoint=checkpoint_path,
         )
     return PolicySpec(
         name=label or fallback_name,
         policy=fallback_policy,
+        sample_policy=_repeat_policy_samples(fallback_policy),
         kind="deterministic",
         checkpoint=None,
     )
@@ -419,6 +459,100 @@ def run_episode(
     }
 
 
+def run_episode_from_initial_decision(
+    task_id: str,
+    variant_seed: int,
+    policy_name: str,
+    first_decision: Dict[str, Any],
+    *,
+    eval_mode: bool = False,
+) -> Dict[str, Any]:
+    if task_id not in SENTINEL_TASK_IDS:
+        raise ValueError("Sampling-based episode replay is only implemented for SENTINEL tasks.")
+
+    env = SentinelEnv(eval_mode=eval_mode)
+    obs = env.reset(task_id=task_id, variant_seed=variant_seed)
+    done = False
+    history: List[Dict[str, Any]] = []
+    max_steps = getattr(obs, "max_steps", 30) or 30
+
+    result = env.step(first_decision)
+    done = result.done
+    history.append(_history_entry(first_decision, result))
+
+    step = 1
+    while not done and step < max_steps:
+        fallback_decision = _corrective_policy(result.observation)
+        result = env.step(fallback_decision)
+        done = result.done
+        history.append(_history_entry(fallback_decision, result))
+        step += 1
+
+    grade = env.grade()
+    grade_payload = grade.model_dump(mode="json") if hasattr(grade, "model_dump") else dict(grade)
+    summary = _summarize_history(history)
+    summary["score"] = grade_payload.get("score", 0.0)
+
+    return {
+        "policy": policy_name,
+        "task_id": task_id,
+        "variant_seed": variant_seed,
+        "grade": grade_payload,
+        "summary": summary,
+        "history": history,
+    }
+
+
+def evaluate_policy_best_of_k(
+    task_id: str,
+    variant_seed: int,
+    policy_spec: PolicySpec,
+    *,
+    num_samples: int,
+    temperature: float,
+    eval_mode: bool = True,
+) -> Dict[str, Any]:
+    if task_id not in SENTINEL_TASK_IDS:
+        top1_episode = run_episode(task_id, variant_seed, policy_spec.name, policy_spec.policy, eval_mode=eval_mode)
+        return {
+            "top1": top1_episode,
+            "best": top1_episode,
+            "samples": [top1_episode],
+        }
+
+    sampler_env = SentinelEnv(eval_mode=eval_mode)
+    observation = sampler_env.reset(task_id=task_id, variant_seed=variant_seed)
+    sampled_decisions = policy_spec.sample_policy(observation, max(1, int(num_samples)), float(temperature))
+    if not sampled_decisions:
+        sampled_decisions = [policy_spec.policy(observation)]
+
+    sampled_episodes: List[Dict[str, Any]] = []
+    for index, decision in enumerate(sampled_decisions):
+        episode = run_episode_from_initial_decision(
+            task_id=task_id,
+            variant_seed=variant_seed,
+            policy_name=f"{policy_spec.name}/sample_{index + 1}",
+            first_decision=decision,
+            eval_mode=eval_mode,
+        )
+        episode["sample_index"] = index
+        sampled_episodes.append(episode)
+
+    best_episode = max(
+        sampled_episodes,
+        key=lambda item: (
+            float((item.get("summary") or {}).get("score", 0.0)),
+            float((item.get("summary") or {}).get("caught", 0.0)),
+            float((item.get("summary") or {}).get("prevented_damage_total", 0.0)),
+        ),
+    )
+    return {
+        "top1": sampled_episodes[0],
+        "best": best_episode,
+        "samples": sampled_episodes,
+    }
+
+
 def _load_reward_points(log_paths: Iterable[Path]) -> tuple[List[float], Optional[str]]:
     for path in MONITOR_CANDIDATES:
         if not path.exists():
@@ -587,6 +721,18 @@ def export_proxy_gap_summary(
         notes.append("Held-out detection now exceeds training detection, which is good but worth confirming with rollout audits.")
     if ood and ood_gap > 0.12:
         notes.append("OOD score drops meaningfully below main held-out performance; broaden eval before claiming robust generalization.")
+    if float(monitoring_snapshot.get("approx_kl", 0.0) or 0.0) > 0.0:
+        approx_kl = float(monitoring_snapshot.get("approx_kl", 0.0) or 0.0)
+        if approx_kl > 0.12:
+            notes.append("Approx KL is elevated in the latest monitoring snapshot; verify the adaptive beta guardrail before a long run.")
+    if float(monitoring_snapshot.get("unique_completion_ratio", 0.0) or 0.0) < 0.35 and monitoring_snapshot.get("batch_size"):
+        notes.append("Unique completion ratio is low in the latest batch; watch for policy collapse or repetitive outputs.")
+    if float(monitoring_snapshot.get("effective_prompt_ratio", 0.0) or 0.0) < 0.40 and monitoring_snapshot.get("batch_size"):
+        notes.append("Effective prompt ratio is low in the latest batch; too many prompts may be either trivial or zero-signal.")
+    if float(monitoring_snapshot.get("frontier_hit_rate", 0.0) or 0.0) < 0.20 and monitoring_snapshot.get("batch_size"):
+        notes.append("Frontier hit rate is low in the latest batch; the adaptive curriculum may not be spending enough time near the capability frontier.")
+    if float(monitoring_snapshot.get("task_diversity_ratio", 0.0) or 0.0) < 0.50 and monitoring_snapshot.get("batch_size"):
+        notes.append("Task diversity ratio is low in the latest batch; training may be over-concentrating on too few environment families.")
     if not notes:
         notes.append("Training and evaluation signals are reasonably aligned for a hackathon-scale run.")
 
@@ -604,6 +750,16 @@ def export_proxy_gap_summary(
         "training_risk_reduction_rate": round(training_risk, 4),
         "held_out_risk_reduction_rate": round(held_out_risk, 4),
         "risk_gap": risk_gap,
+        "approx_kl": round(float(monitoring_snapshot.get("approx_kl", 0.0) or 0.0), 6),
+        "adaptive_beta": round(float(monitoring_snapshot.get("adaptive_beta", 0.0) or 0.0), 6),
+        "decision_entropy": round(float(monitoring_snapshot.get("decision_entropy", 0.0) or 0.0), 4),
+        "unique_completion_ratio": round(float(monitoring_snapshot.get("unique_completion_ratio", 0.0) or 0.0), 4),
+        "zero_reward_fraction": round(float(monitoring_snapshot.get("zero_reward_fraction", 0.0) or 0.0), 4),
+        "trivially_solved_fraction": round(float(monitoring_snapshot.get("trivially_solved_fraction", 0.0) or 0.0), 4),
+        "productive_fraction": round(float(monitoring_snapshot.get("productive_fraction", 0.0) or 0.0), 4),
+        "effective_prompt_ratio": round(float(monitoring_snapshot.get("effective_prompt_ratio", 0.0) or 0.0), 4),
+        "frontier_hit_rate": round(float(monitoring_snapshot.get("frontier_hit_rate", 0.0) or 0.0), 4),
+        "task_diversity_ratio": round(float(monitoring_snapshot.get("task_diversity_ratio", 0.0) or 0.0), 4),
         "ood_candidate_mean_score": round(ood_score, 4) if ood else None,
         "ood_score_gap_vs_main": ood_gap if ood else None,
         "ood_detection_gap_vs_main": ood_detection_gap if ood else None,
@@ -808,6 +964,28 @@ def write_markdown_summary(
             f"- Best reward mean: {monitoring_snapshot.get('best_reward_mean', 0.0):.4f}",
             f"- Avg steps: {monitoring_snapshot.get('avg_steps', 0.0):.2f}",
         ]
+        if "approx_kl" in monitoring_snapshot:
+            lines.append(f"- Approx KL: {monitoring_snapshot.get('approx_kl', 0.0):.6f}")
+        if "adaptive_beta" in monitoring_snapshot:
+            lines.append(f"- Adaptive beta: {monitoring_snapshot.get('adaptive_beta', 0.0):.6f}")
+        if "policy_entropy" in monitoring_snapshot:
+            lines.append(f"- Policy entropy: {monitoring_snapshot.get('policy_entropy', 0.0):.6f}")
+        if "clip_ratio" in monitoring_snapshot:
+            lines.append(f"- Clip ratio: {monitoring_snapshot.get('clip_ratio', 0.0):.6f}")
+        if "decision_entropy" in monitoring_snapshot:
+            lines.append(f"- Decision entropy: {monitoring_snapshot.get('decision_entropy', 0.0):.4f}")
+        if "unique_completion_ratio" in monitoring_snapshot:
+            lines.append(f"- Unique completion ratio: {monitoring_snapshot.get('unique_completion_ratio', 0.0):.4f}")
+        if "zero_reward_fraction" in monitoring_snapshot:
+            lines.append(f"- Zero-reward fraction: {monitoring_snapshot.get('zero_reward_fraction', 0.0):.4f}")
+        if "trivially_solved_fraction" in monitoring_snapshot:
+            lines.append(f"- Trivially solved fraction: {monitoring_snapshot.get('trivially_solved_fraction', 0.0):.4f}")
+        if "effective_prompt_ratio" in monitoring_snapshot:
+            lines.append(f"- Effective prompt ratio: {monitoring_snapshot.get('effective_prompt_ratio', 0.0):.4f}")
+        if "frontier_hit_rate" in monitoring_snapshot:
+            lines.append(f"- Frontier hit rate: {monitoring_snapshot.get('frontier_hit_rate', 0.0):.4f}")
+        if "task_diversity_ratio" in monitoring_snapshot:
+            lines.append(f"- Task diversity ratio: {monitoring_snapshot.get('task_diversity_ratio', 0.0):.4f}")
         if "detection_rate" in monitoring_snapshot:
             lines += [
                 f"- Detection rate: {monitoring_snapshot.get('detection_rate', 0.0):.4f}",
@@ -856,6 +1034,17 @@ def write_markdown_summary(
                 f"- OOD candidate detection rate: {ood_overall.get('candidate_detection_rate', 0.0):.4f}",
                 "",
             ]
+        sampling_eval = held_out_eval.get("sampling_eval") or {}
+        if sampling_eval:
+            top1_sampled = (sampling_eval.get("top1_sampled") or {}).get("overall", {})
+            best_of_k = (sampling_eval.get("best_of_k_summary") or {}).get("overall", {})
+            lines += [
+                f"- Sampled Top-1 mean score: {top1_sampled.get('candidate_mean_score', 0.0):.4f}",
+                f"- Best-of-{sampling_eval.get('k', 1)} mean score: {best_of_k.get('candidate_mean_score', 0.0):.4f}",
+                f"- Best-of-{sampling_eval.get('k', 1)} gain vs sampled Top-1: {sampling_eval.get('candidate_gain_vs_top1', 0.0):+.4f}",
+                f"- Best-of-{sampling_eval.get('k', 1)} detection gain: {sampling_eval.get('candidate_detection_gain_vs_top1', 0.0):+.4f}",
+                "",
+            ]
     else:
         lines += [
             "- No held-out evaluation report found yet. Run `python scripts/eval_sentinel.py` first.",
@@ -888,6 +1077,13 @@ def write_markdown_summary(
             f"- Detection gap: {proxy_gap_summary.get('detection_gap', 0.0):+.4f}",
             f"- False-positive gap: {proxy_gap_summary.get('false_positive_gap', 0.0):+.4f}",
             f"- Risk-reduction gap: {proxy_gap_summary.get('risk_gap', 0.0):+.4f}",
+            f"- Latest approx KL: {proxy_gap_summary.get('approx_kl', 0.0):.6f}",
+            f"- Latest adaptive beta: {proxy_gap_summary.get('adaptive_beta', 0.0):.6f}",
+            f"- Latest decision entropy: {proxy_gap_summary.get('decision_entropy', 0.0):.4f}",
+            f"- Latest unique completion ratio: {proxy_gap_summary.get('unique_completion_ratio', 0.0):.4f}",
+            f"- Latest effective prompt ratio: {proxy_gap_summary.get('effective_prompt_ratio', 0.0):.4f}",
+            f"- Latest frontier hit rate: {proxy_gap_summary.get('frontier_hit_rate', 0.0):.4f}",
+            f"- Latest task diversity ratio: {proxy_gap_summary.get('task_diversity_ratio', 0.0):.4f}",
         ]
         if proxy_gap_summary.get("ood_candidate_mean_score") is not None:
             lines += [

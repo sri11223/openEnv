@@ -34,6 +34,8 @@ The remaining gaps are now mostly research-proof artifacts from a real long trai
 | Optional LLM judge panel | Done for IRT and SENTINEL trajectories | `judges/llm_grader.py` |
 | Cross-episode memory store and task-specific prompt injection | Done | `training/memory.py`, `train.py` |
 | Curriculum controller | Done | `training/curriculum.py` |
+| Adaptive difficulty windows and frontier mastery counters | Done | `training/curriculum.py` |
+| Adaptive frontier ease-back on repeated failure | Done | `training/curriculum.py` |
 | Adversarial scenario designer and Sentinel arms-race cases | Done | `training/adversarial.py`, `train.py` |
 | Trust gate auto-block | Done | `sentinel/environment.py`, `sentinel/trust.py` |
 | Real-time demo/API surface | Done | `/sentinel/dashboard`, `/sentinel/intercept`, `/sentinel/stream` in `app.py` |
@@ -48,10 +50,15 @@ The remaining gaps are now mostly research-proof artifacts from a real long trai
 | Before/after trajectories | `proof_pack.py` now supports checkpoint-aware comparisons under `outputs/proof_pack/trajectories/`. | Run it with warm-start and trained checkpoints, then curate the strongest 2-3 examples for the final pitch. |
 | Training monitoring artifacts | `train.py` now writes `outputs/monitoring/training_metrics.jsonl`, `outputs/monitoring/latest_summary.json`, `outputs/monitoring/training_stack_versions.json`, and periodic rollout audits. | Capture screenshots / charts from a real run for the pitch deck. |
 | Held-out checkpoint evaluation | `scripts/eval_sentinel.py` now exports `outputs/evals/sentinel_held_out_report.json` and `.md` on a main held-out seed slice plus a separate OOD seed slice in eval mode. | Run it after warm-start and after the trained checkpoint, then surface the delta in the pitch deck. |
+| Sampled Top-1 vs Best-of-K | Held-out evaluation now compares sampled Top-1 behavior against Best-of-K on the same seeds. | Use it to show whether RL is improving ranking of good trajectories rather than inventing new capability. |
 | Tripwire reward-safety suite | The held-out report now includes policy-level tripwire tasks for confidence washing, rubric gaming, sycophancy-like pressure, trust-gate bypass, reward-tampering analogs, metric spoofing, audit-log laundering, fabricated evidence, and alert suppression. | Quote pass-rate and hard-failure counts in the pitch deck. |
+| Verifier-attack tripwires | The held-out report now also includes gibberish-answer, adversarial-prefix, fake-self-certification, overlong-nonsense, and format-jamming attacks. | Use these to show the verifier story is being stress-tested, not only benchmarked. |
 | Per-misbehavior confusion matrix | Held-out evaluation now exports per-misbehavior detection/miss/misclassification summaries. | Use it to show which failure modes improved and which still need work. |
 | Proxy-gap summary | `proof_pack.py` now exports `outputs/proof_pack/proxy_gap_summary.json` comparing train-time reward with held-out and OOD outcomes. | Use it to keep the proof story honest and catch Goodhart drift quickly. |
 | Top failure modes summary | `proof_pack.py` now exports `outputs/proof_pack/top_failure_modes.json` and quotes the top-ranked failures directly in `outputs/proof_pack/summary.md`. | Read this section verbatim in judge prep so weaknesses are surfaced honestly. |
+| KL and diversity monitor | `train.py` now writes trainer-side KL/entropy/beta state into monitoring artifacts together with completion diversity metrics. | Use it to show that training stability is being watched, not guessed. |
+| Productive-signal monitor | `train.py` now tracks zero-signal, trivially solved, productive, effective-prompt, and frontier-hit rates. | Use it to show that adaptive curriculum quality is being measured instead of assumed. |
+| Task-diversity monitor | `train.py` and `proof_pack.py` now surface task-diversity ratio so procedural environment coverage stays visible. | Use it to show the run is not quietly collapsing into a narrow prompt slice. |
 | Arms-race visualization | Case scoring and report data exist in `training/adversarial.py`. | Need optional chart image if the pitch uses the adaptive-worker story visually. |
 
 ## Not Yet Implemented
@@ -71,6 +78,7 @@ The code is now modular in the right places:
 - `sentinel/trust.py` owns trust policy.
 - `sentinel/feedback.py` owns the worker/global corrective memory loop.
 - `training/` owns curriculum, memory, and adversarial generation.
+- `training/curriculum.py` now combines coarse tiering with RLVE-style per-task frontier windows plus an automatic ease-back path, which is the right next step for scaling beyond a static prompt mix.
 
 The codebase now has a usable backend, browser demo surface, trust gate, Sentinel judge panel, and adversarial case loop. The remaining quality issue is not duplication; it is turning the research-proof loops into submission artifacts. For first-prize probability, the next best work is:
 

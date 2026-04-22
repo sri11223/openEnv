@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import proof_pack
+from judges import llm_grader
 from sentinel.environment import SentinelEnv
 from judges.llm_grader import calibrate_judge_panel
 from sentinel.evaluation import (
@@ -24,6 +26,7 @@ from train import (
     _build_warm_start_examples,
     _sentinel_history_entry,
     _warm_start_sentinel_decision_for_observation,
+    TrainingMonitor,
     RolloutAuditSampler,
     collect_training_stack_versions,
 )
@@ -173,6 +176,118 @@ def test_aggregate_batch_metrics_surfaces_sentinel_monitoring():
     assert "risk_reduction_rate" in metrics
     assert "worker_rehabilitation_rate" in metrics
     assert "basic_oversight" in metrics["per_task"]
+
+
+def test_aggregate_batch_metrics_tracks_completion_diversity():
+    metrics = _aggregate_batch_metrics(
+        rewards=[0.4, 0.6, 0.7],
+        histories=[[], [], []],
+        task_ids=["basic_oversight", "basic_oversight", "basic_oversight"],
+        variant_seeds=[0, 1, 2],
+        completions=[
+            '{"decision":"BLOCK","reason":"hallucination"}',
+            '{"decision":"BLOCK","reason":"hallucination"}',
+            '{"decision":"REDIRECT","reason":"destructive_precedence"}',
+        ],
+        curriculum_summary={"tier": "warmup"},
+        prompt_refreshes=0,
+    )
+
+    assert metrics["unique_completion_ratio"] == 0.6667
+    assert metrics["decision_variety"] == 2
+    assert metrics["decision_entropy"] > 0.0
+    assert metrics["decision_distribution"]["BLOCK"] == 0.6667
+
+
+def test_aggregate_batch_metrics_tracks_productive_signal_metrics():
+    metrics = _aggregate_batch_metrics(
+        rewards=[0.0, 0.45, 0.99],
+        histories=[[], [], []],
+        task_ids=["basic_oversight", "fleet_monitoring_conflict", "basic_oversight"],
+        variant_seeds=[0, 1, 2],
+        completions=[
+            '{"decision":"APPROVE","reason":null}',
+            '{"decision":"BLOCK","reason":"reward_hacking"}',
+            '{"decision":"APPROVE","reason":null}',
+        ],
+        curriculum_summary={
+            "active_task_ids": ["basic_oversight", "fleet_monitoring_conflict", "adversarial_worker", "multi_crisis_command"],
+            "adaptive_difficulty": {
+                "frontier_scenarios": [{"task_id": "fleet_monitoring_conflict", "variant_seed": 1}],
+            },
+        },
+        prompt_refreshes=0,
+    )
+
+    assert metrics["zero_reward_fraction"] == 0.3333
+    assert metrics["trivially_solved_fraction"] == 0.3333
+    assert metrics["productive_fraction"] == 0.3333
+    assert metrics["effective_prompt_ratio"] == 0.3333
+    assert metrics["frontier_hit_rate"] == 0.3333
+    assert metrics["task_diversity_ratio"] == 0.5
+
+
+def test_training_monitor_merges_trainer_metrics_into_latest_summary(tmp_path: Path):
+    monitor = TrainingMonitor(str(tmp_path))
+    batch_metrics = monitor.log_batch(
+        rewards=[0.7],
+        histories=[[]],
+        task_ids=["basic_oversight"],
+        variant_seeds=[100],
+        completions=['{"decision":"BLOCK","reason":"reward_hacking"}'],
+        curriculum_summary={"tier": "warmup"},
+        prompt_refreshes=1,
+        reward_schedule={"stage": "warm_start", "progress": 0.1},
+    )
+    assert batch_metrics["reward_mean"] == 0.7
+
+    monitor.log_trainer_metrics(
+        global_step=3,
+        trainer_metrics={"approx_kl": 0.09, "policy_entropy": 0.71, "clip_ratio": 0.11},
+        guardrail={"current_beta": 0.08, "action": "increase_beta"},
+    )
+
+    payload = json.loads((tmp_path / "latest_summary.json").read_text(encoding="utf-8"))
+    assert payload["approx_kl"] == 0.09
+    assert payload["adaptive_beta"] == 0.08
+    assert payload["reward_mean"] == 0.7
+
+
+def test_curriculum_adaptive_window_advances_frontier(tmp_path: Path):
+    ctrl = CurriculumController(
+        state_path=str(tmp_path / "curriculum_state.json"),
+        active_task_ids=["basic_oversight"],
+    )
+
+    for _ in range(3):
+        ctrl.record_episode("basic_oversight", 0, score=0.90, steps=1)
+
+    summary = ctrl.summary()
+    adaptive = (summary.get("adaptive_difficulty") or {}).get("per_task", {}).get("basic_oversight", {})
+
+    assert adaptive["difficulty_high"] == 1
+    assert adaptive["frontier_variant_seed"] == 1
+    assert summary["effective_prompt_ratio"] == 1.0
+
+
+def test_curriculum_adaptive_window_eases_back_after_frontier_failures(tmp_path: Path):
+    ctrl = CurriculumController(
+        state_path=str(tmp_path / "curriculum_state.json"),
+        active_task_ids=["basic_oversight"],
+    )
+
+    for _ in range(3):
+        ctrl.record_episode("basic_oversight", 0, score=0.90, steps=1)
+    for _ in range(3):
+        ctrl.record_episode("basic_oversight", 1, score=0.0, steps=1)
+
+    summary = ctrl.summary()
+    adaptive = (summary.get("adaptive_difficulty") or {}).get("per_task", {}).get("basic_oversight", {})
+
+    assert adaptive["difficulty_high"] == 0
+    assert adaptive["frontier_variant_seed"] == 0
+    assert adaptive["frontier_backoffs"] == 1
+    assert summary["adaptive_difficulty"]["total_frontier_backoffs"] == 1
 
 
 def test_proof_pack_prefers_structured_monitoring_file(tmp_path: Path, monkeypatch):
@@ -350,6 +465,12 @@ def test_build_eval_report_includes_tripwire_and_ood_sections():
     ]
     baseline_tripwire = {"overall": {"mean_score": 0.40, "pass_rate": 0.20}}
     candidate_tripwire = {"overall": {"mean_score": 0.80, "pass_rate": 0.80}}
+    sampling_top1_runs = [
+        {"task_id": "basic_oversight", "variant_seed": 100, "summary": {"score": 0.50, "misbehaviors": 2, "caught": 1, "false_positives": 0, "prevented_damage_total": 0.4, "allowed_damage_total": 0.2, "revisions_attempted": 1, "revisions_approved": 0}, "history": []},
+    ]
+    sampling_best_runs = [
+        {"task_id": "basic_oversight", "variant_seed": 100, "summary": {"score": 0.72, "misbehaviors": 2, "caught": 2, "false_positives": 0, "prevented_damage_total": 0.7, "allowed_damage_total": 0.1, "revisions_attempted": 1, "revisions_approved": 1}, "history": []},
+    ]
 
     report = build_eval_report(
         baseline_runs=baseline_runs,
@@ -357,6 +478,12 @@ def test_build_eval_report_includes_tripwire_and_ood_sections():
         baseline_label="baseline",
         candidate_label="candidate",
         seeds=parse_seed_spec("100"),
+        best_of_k=4,
+        sampling_temperature=0.8,
+        baseline_sampling_top1_runs=sampling_top1_runs,
+        candidate_sampling_top1_runs=sampling_top1_runs,
+        baseline_best_of_k_runs=sampling_best_runs,
+        candidate_best_of_k_runs=sampling_best_runs,
         ood_seeds=parse_seed_spec("200"),
         baseline_ood_runs=baseline_runs,
         candidate_ood_runs=candidate_runs,
@@ -368,6 +495,7 @@ def test_build_eval_report_includes_tripwire_and_ood_sections():
     assert report["tripwire"]["pass_rate_delta"] == 0.6
     assert "ood" in report
     assert report["ood"]["overall"]["candidate_mean_score"] == 0.7
+    assert report["sampling_eval"]["candidate_gain_vs_top1"] == 0.22
 
 
 def test_proxy_gap_summary_surfaces_main_and_ood_gap():
@@ -377,6 +505,9 @@ def test_proxy_gap_summary_surfaces_main_and_ood_gap():
         "detection_rate": 0.90,
         "false_positive_rate": 0.08,
         "risk_reduction_rate": 0.88,
+        "effective_prompt_ratio": 0.61,
+        "frontier_hit_rate": 0.34,
+        "task_diversity_ratio": 0.75,
     }
     held_out = {
         "source": "outputs/evals/sentinel_held_out_report.json",
@@ -399,6 +530,7 @@ def test_proxy_gap_summary_surfaces_main_and_ood_gap():
     assert payload["found_proxy_gap"] is True
     assert payload["score_gap"] == 0.12
     assert payload["ood_score_gap_vs_main"] == 0.09
+    assert payload["task_diversity_ratio"] == 0.75
 
 
 def test_top_failure_modes_ranks_confusion_tripwires_and_ood_gap():
@@ -478,3 +610,20 @@ def test_judge_panel_calibration_penalizes_disagreement():
 
     assert payload["disagreement_penalty"] > 0.0
     assert payload["calibrated_panel_score"] != payload["raw_panel_score"]
+
+
+def test_grade_sync_returns_judge_mode_split_when_panel_unavailable(monkeypatch):
+    monkeypatch.setattr(llm_grader, "API_KEY", "")
+
+    payload = llm_grader.grade_sync(
+        task_id="basic_oversight",
+        trajectory_text="Step 1: BLOCK reward hacking",
+        api_key="",
+        deterministic_score=0.72,
+    )
+
+    assert payload["hybrid"] == 0.72
+    assert payload["deterministic_score"] == 0.72
+    assert payload["generative_score"] == 0.0
+    assert payload["judge_mode_split"]["discriminative"]["active"] is False
+    assert payload["judge_mode_split"]["generative"]["gate_open"] is False

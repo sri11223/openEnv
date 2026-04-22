@@ -30,6 +30,9 @@ def main() -> None:
     parser.add_argument("--candidate-label", type=str, default="", help="Display label for the candidate policy.")
     parser.add_argument("--ood-seeds", type=str, default="200-204", help="Comma list or range of OOD held-out seeds.")
     parser.add_argument("--skip-tripwires", action="store_true", help="Skip the policy-level tripwire evaluation suite.")
+    parser.add_argument("--best-of-k", type=int, default=4, help="Sample K first-step decisions and score the best one separately.")
+    parser.add_argument("--sampling-temperature", type=float, default=0.8, help="Temperature used for sampled Best-of-K evaluation.")
+    parser.add_argument("--skip-best-of-k", action="store_true", help="Skip the sampled Top-1 vs Best-of-K comparison.")
     parser.add_argument("--output-dir", type=str, default=str(DEFAULT_EVAL_OUTPUT_DIR), help="Where to write the eval report.")
     parser.add_argument("--dry-run", action="store_true", help="Validate config and exit without executing episodes.")
     args = parser.parse_args()
@@ -45,6 +48,8 @@ def main() -> None:
                 "candidate_checkpoint": args.candidate_checkpoint or None,
                 "base_model": args.base_model or None,
                 "tripwires": not args.skip_tripwires,
+                "best_of_k": None if args.skip_best_of_k else max(1, int(args.best_of_k)),
+                "sampling_temperature": float(args.sampling_temperature),
                 "output_dir": args.output_dir,
             }
         )
@@ -67,6 +72,10 @@ def main() -> None:
 
     baseline_runs = []
     candidate_runs = []
+    baseline_sampling_top1_runs = []
+    candidate_sampling_top1_runs = []
+    baseline_best_of_k_runs = []
+    candidate_best_of_k_runs = []
     baseline_ood_runs = []
     candidate_ood_runs = []
     for task_id in DEFAULT_HELD_OUT_TASK_IDS:
@@ -89,6 +98,27 @@ def main() -> None:
                     eval_mode=True,
                 )
             )
+            if not args.skip_best_of_k and args.best_of_k > 1:
+                baseline_sampled = proof_pack.evaluate_policy_best_of_k(
+                    task_id=task_id,
+                    variant_seed=seed,
+                    policy_spec=baseline_spec,
+                    num_samples=args.best_of_k,
+                    temperature=args.sampling_temperature,
+                    eval_mode=True,
+                )
+                candidate_sampled = proof_pack.evaluate_policy_best_of_k(
+                    task_id=task_id,
+                    variant_seed=seed,
+                    policy_spec=candidate_spec,
+                    num_samples=args.best_of_k,
+                    temperature=args.sampling_temperature,
+                    eval_mode=True,
+                )
+                baseline_sampling_top1_runs.append(baseline_sampled["top1"])
+                candidate_sampling_top1_runs.append(candidate_sampled["top1"])
+                baseline_best_of_k_runs.append(baseline_sampled["best"])
+                candidate_best_of_k_runs.append(candidate_sampled["best"])
         for seed in ood_seeds:
             baseline_ood_runs.append(
                 proof_pack.run_episode(
@@ -121,6 +151,12 @@ def main() -> None:
         baseline_label=baseline_spec.name,
         candidate_label=candidate_spec.name,
         seeds=seeds,
+        best_of_k=args.best_of_k,
+        sampling_temperature=args.sampling_temperature,
+        baseline_sampling_top1_runs=baseline_sampling_top1_runs if baseline_sampling_top1_runs else None,
+        candidate_sampling_top1_runs=candidate_sampling_top1_runs if candidate_sampling_top1_runs else None,
+        baseline_best_of_k_runs=baseline_best_of_k_runs if baseline_best_of_k_runs else None,
+        candidate_best_of_k_runs=candidate_best_of_k_runs if candidate_best_of_k_runs else None,
         ood_seeds=ood_seeds,
         baseline_ood_runs=baseline_ood_runs,
         candidate_ood_runs=candidate_ood_runs,

@@ -94,10 +94,14 @@ Required proof package:
 - Run a baseline or early checkpoint and save detection rate / score.
 - Run `USE_SENTINEL=1 WARM_START_STEPS=20 TRAIN_STEPS=300 python train.py`.
 - Save `outputs/monitoring/latest_summary.json` and `outputs/monitoring/training_metrics.jsonl`.
+- Save `outputs/monitoring/training_stability.jsonl`.
 - Save `outputs/monitoring/training_stack_versions.json` and `outputs/monitoring/rollout_audits/latest.md`.
+- Quote `effective_prompt_ratio` and `frontier_hit_rate` from the monitoring snapshot so judges can see whether training stayed near the capability frontier.
+- Quote `task_diversity_ratio` too so judges can see whether training covered multiple environment families instead of collapsing into one easy slice.
 - Run `python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - Save the tripwire and OOD sections from `outputs/evals/sentinel_held_out_report.md`.
+- Save the sampled Top-1 vs Best-of-K section from `outputs/evals/sentinel_held_out_report.md`.
 - Save the per-misbehavior confusion matrix from `outputs/evals/sentinel_held_out_report.json`.
 - Save `outputs/proof_pack/proxy_gap_summary.json`.
 - Save `outputs/proof_pack/top_failure_modes.json` and quote the top 2-3 failures in the pitch notes.
@@ -124,6 +128,9 @@ Target score: 9-10 / 10.
 Evidence:
 
 - `train.py` supports HF TRL GRPO and optional Unsloth.
+- `train.py` now logs KL drift, adaptive beta, policy entropy, decision entropy, and unique completion ratio.
+- `train.py` now logs zero-reward fraction, trivially solved fraction, productive fraction, effective prompt ratio, and frontier hit rate.
+- `training/curriculum.py` now supports both adaptive frontier advance and adaptive ease-back based on success and failure thresholds.
 - `requirements-train.txt` installs the training stack.
 - `pyproject.toml` exposes a `train` optional dependency group.
 - `sentinel/rewards.py` has deterministic reward sanity checks.
@@ -132,6 +139,7 @@ Evidence:
 - `sentinel/constitution.py` adds five-principle deterministic constitutional scoring.
 - `training/adversarial.py` adds Sentinel adversarial worker cases and arms-race report data.
 - `judges/llm_grader.py` supports optional hybrid judging with Sentinel-specific detection/risk/trust judges.
+- `judges/llm_grader.py` now separates deterministic scoring from the generative panel and keeps the generative path gated by default.
 
 Commands judges can run:
 
@@ -190,6 +198,7 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Save one human-readable rollout audit sample from `outputs/monitoring/rollout_audits/`.
 - [ ] Run `python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - [ ] Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
+- [ ] Save the sampled Top-1 vs Best-of-K comparison.
 - [ ] Save the tripwire pass-rate summary and at least one passing and one failing tripwire example.
 - [ ] Save the candidate per-misbehavior confusion matrix.
 - [ ] Save the proxy-gap summary and quote one line from it in the pitch notes.

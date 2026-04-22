@@ -92,6 +92,9 @@ TASK_WEIGHTS = {
 MIN_CONFIDENCE = 0.75     # discard judge scores below this confidence
 HYBRID_LLM_WEIGHT = 0.40  # weight given to LLM panel in hybrid score
 MAX_DISAGREEMENT_PENALTY = 0.25
+USE_GENERATIVE_PANEL_IN_HYBRID = os.getenv("USE_GENERATIVE_PANEL_IN_HYBRID", "0") == "1"
+GENERATIVE_GATE_MIN_CONFIDENCE = float(os.getenv("GENERATIVE_GATE_MIN_CONFIDENCE", "0.85"))
+GENERATIVE_GATE_MAX_DISAGREEMENT = float(os.getenv("GENERATIVE_GATE_MAX_DISAGREEMENT", "0.12"))
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +351,38 @@ _blast_radius = GraderBlastRadius()
 _finding_set = BoundedFindingSet()
 
 
+def _judge_mode_split_payload(
+    *,
+    deterministic_score: Optional[float],
+    generative_score: float,
+    raw_score: float = 0.0,
+    generative_active: bool,
+    generative_used_in_hybrid: bool,
+    generative_gate_open: bool,
+) -> Dict[str, Any]:
+    deterministic = round(float(deterministic_score), 4) if deterministic_score is not None else None
+    return {
+        "deterministic": {
+            "score": deterministic,
+            "active": deterministic_score is not None,
+            "used_in_hybrid": deterministic_score is not None,
+        },
+        "discriminative": {
+            "score": None,
+            "active": False,
+            "used_in_hybrid": False,
+            "note": "No discriminative verifier configured.",
+        },
+        "generative": {
+            "score": round(float(generative_score), 4),
+            "raw_score": round(float(raw_score), 4),
+            "active": bool(generative_active),
+            "used_in_hybrid": bool(generative_used_in_hybrid),
+            "gate_open": bool(generative_gate_open),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Single judge call
 # ---------------------------------------------------------------------------
@@ -419,7 +454,26 @@ async def grade_with_panel(
     _key = api_key or API_KEY
     if not _key:
         logger.warning("No API key for LLM judge panel, returning 0.0")
-        return {"score": 0.0, "hybrid": deterministic_score or 0.0, "judges": {}, "confidence": 0.0}
+        deterministic = round(float(deterministic_score), 4) if deterministic_score is not None else None
+        return {
+            "score": 0.0,
+            "raw_score": 0.0,
+            "hybrid": deterministic_score or 0.0,
+            "judges": {},
+            "confidence": 0.0,
+            "available": [],
+            "deterministic_score": deterministic,
+            "discriminative_score": None,
+            "generative_score": 0.0,
+            "generative_gated_in_hybrid": False,
+            "judge_mode_split": _judge_mode_split_payload(
+                deterministic_score=deterministic_score,
+                generative_score=0.0,
+                generative_active=False,
+                generative_used_in_hybrid=False,
+                generative_gate_open=False,
+            ),
+        }
 
     weights = TASK_WEIGHTS.get(task_id, TASK_WEIGHTS["full_incident_management"])
     requested_judges = _judge_names_for_task(task_id)
@@ -427,12 +481,25 @@ async def grade_with_panel(
 
     if not available_judges:
         logger.warning("All judges circuit-broken, returning deterministic score only")
+        deterministic = round(float(deterministic_score), 4) if deterministic_score is not None else None
         return {
             "score": 0.0,
+            "raw_score": 0.0,
             "hybrid": deterministic_score or 0.0,
             "judges": {},
             "confidence": 0.0,
             "available": [],
+            "deterministic_score": deterministic,
+            "discriminative_score": None,
+            "generative_score": 0.0,
+            "generative_gated_in_hybrid": False,
+            "judge_mode_split": _judge_mode_split_payload(
+                deterministic_score=deterministic_score,
+                generative_score=0.0,
+                generative_active=False,
+                generative_used_in_hybrid=False,
+                generative_gate_open=False,
+            ),
         }
 
     async with httpx.AsyncClient() as client:
@@ -495,23 +562,44 @@ async def grade_with_panel(
     mean_confidence = sum(valid_confidences) / len(valid_confidences) if valid_confidences else 0.0
     calibration = calibrate_judge_panel(judge_results, deterministic_score=deterministic_score)
     calibrated_panel_score = float(calibration["calibrated_panel_score"])
+    generative_gate_open = (
+        USE_GENERATIVE_PANEL_IN_HYBRID
+        and mean_confidence >= GENERATIVE_GATE_MIN_CONFIDENCE
+        and float(calibration["disagreement_penalty"]) <= GENERATIVE_GATE_MAX_DISAGREEMENT
+    )
 
     # Hybrid score
     if deterministic_score is not None:
-        hybrid = (1 - HYBRID_LLM_WEIGHT) * deterministic_score + HYBRID_LLM_WEIGHT * calibrated_panel_score
+        hybrid = float(deterministic_score)
+        if generative_gate_open:
+            hybrid = (1 - HYBRID_LLM_WEIGHT) * deterministic_score + HYBRID_LLM_WEIGHT * calibrated_panel_score
     else:
         hybrid = calibrated_panel_score
 
+    deterministic = round(float(deterministic_score), 4) if deterministic_score is not None else None
+    generative_score = round(calibrated_panel_score, 4)
     return {
-        "score": round(calibrated_panel_score, 4),
+        "score": generative_score,
         "raw_score": round(panel_score, 4),
         "hybrid": round(hybrid, 4),
         "judges": judge_results,
         "confidence": round(mean_confidence, 4),
         "available": available_judges,
+        "deterministic_score": deterministic,
+        "discriminative_score": None,
+        "generative_score": generative_score,
+        "generative_gated_in_hybrid": generative_gate_open,
         "judge_score_std": calibration["judge_score_std"],
         "judge_score_range": calibration["judge_score_range"],
         "disagreement_penalty": calibration["disagreement_penalty"],
+        "judge_mode_split": _judge_mode_split_payload(
+            deterministic_score=deterministic_score,
+            generative_score=generative_score,
+            raw_score=panel_score,
+            generative_active=bool(judge_results),
+            generative_used_in_hybrid=bool(generative_gate_open or deterministic_score is None),
+            generative_gate_open=generative_gate_open,
+        ),
     }
 
 
@@ -581,8 +669,11 @@ def grade_sync(
 ) -> Dict[str, Any]:
     """Synchronous wrapper around grade_with_panel."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
             # Already in async context (e.g., FastAPI) — use thread pool
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -592,16 +683,30 @@ def grade_sync(
                 )
                 return future.result(timeout=60)
         else:
-            return loop.run_until_complete(
+            return asyncio.run(
                 grade_with_panel(task_id, trajectory_text, api_key, deterministic_score)
             )
     except Exception as e:
         logger.error("grade_sync failed: %s", e)
+        deterministic = round(float(deterministic_score), 4) if deterministic_score is not None else None
         return {
             "score": 0.0,
+            "raw_score": 0.0,
             "hybrid": deterministic_score or 0.0,
             "judges": {},
             "confidence": 0.0,
+            "available": [],
+            "deterministic_score": deterministic,
+            "discriminative_score": None,
+            "generative_score": 0.0,
+            "generative_gated_in_hybrid": False,
+            "judge_mode_split": _judge_mode_split_payload(
+                deterministic_score=deterministic_score,
+                generative_score=0.0,
+                generative_active=False,
+                generative_used_in_hybrid=False,
+                generative_gate_open=False,
+            ),
         }
 
 

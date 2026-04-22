@@ -172,9 +172,16 @@ These are already present in the local repo:
 - checkpoint-aware proof pack
 - held-out evaluation script
 - held-out OOD slice on separate seed families
+- sampled Top-1 vs Best-of-K evaluation
 - reward tripwire evaluation suite
+- verifier-attack tripwires for gibberish, adversarial prefixes, fake self-certification, overlong nonsense, and format-jamming
 - rollout-audit sampling
 - structured monitoring outputs
+- KL-drift monitoring and adaptive beta guardrail
+- decision entropy / completion diversity monitoring
+- adaptive per-task difficulty windows with frontier mastery counters
+- productive-signal monitoring: zero-reward, trivially solved, productive, effective-prompt, and frontier-hit rates
+- task-diversity monitoring so one task family does not quietly dominate training
 - pinned training stack versions
 - dynamic reward-weight scheduling
 - proxy-gap summary for training reward vs held-out behavior
@@ -189,6 +196,7 @@ These are already present in the local repo:
 - corrective revision bonus via rehabilitation tracking
 - per-misbehavior confusion matrix in held-out evaluation
 - disagreement-aware calibration when LLM judge panels are used
+- explicit judge mode split: deterministic score, reserved discriminative slot, and gated generative panel score
 
 ### Anti-hacking posture
 
@@ -204,10 +212,11 @@ The research also makes the remaining gaps easier to name honestly.
 
 ### 1. Stronger judge calibration beyond disagreement
 
-We now calibrate judge panels conservatively using disagreement-aware fallback to deterministic scores.
+We now split judge output explicitly into deterministic, discriminative, and generative lanes, and the generative panel is gated out of the main hybrid score by default.
 
 Still missing if we ever make LLM judging more important:
 
+- a real discriminative verifier model instead of the current reserved slot
 - order-robust scoring
 - multi-sample evidence aggregation
 - prompt-template robustness checks
@@ -234,6 +243,11 @@ The current tripwire suite now covers:
 - audit-log laundering
 - fabricated evidence
 - alert suppression
+- gibberish answer attacks
+- adversarial verifier prefixes
+- fake self-certification
+- overlong nonsense
+- format-jamming
 
 What is still missing is a larger family of these patterns inside full runtime episodes rather than only policy-level tripwires.
 
@@ -248,6 +262,60 @@ For the first serious run, the intended setup is:
 - reward schedule: `dynamic`
 - held-out eval: required
 - proof pack: required
+
+## RLVE / Verifier Upgrades Now In Repo
+
+The latest round of changes pulled the most practical ideas out of the RLVE and verifier-pitfall papers.
+
+### Adaptive curriculum
+
+The curriculum in `training/curriculum.py` now tracks, per task:
+
+- `difficulty_low`
+- `difficulty_high`
+- `mastery_attempts`
+- `mastery_successes`
+
+The upper frontier only moves after repeated success on the current task frontier, and the active window slides forward instead of growing without bound. This keeps the prompt mix closer to the model's capability frontier rather than wasting compute on prompts that are much too easy or much too hard.
+
+The curriculum now also supports an automatic ease-back rule. If the current frontier stays below a failure threshold for enough attempts, the active difficulty window retreats instead of continuing to hammer the model with near-zero-signal prompts. This mirrors the adaptive curriculum style used in RLVE and Reasoning Gym training setups.
+
+### Effective prompt ratio and productive-signal monitoring
+
+Training monitoring now tracks:
+
+- `zero_reward_fraction`
+- `trivially_solved_fraction`
+- `productive_fraction`
+- `effective_prompt_ratio`
+- `frontier_hit_rate`
+- `task_diversity_ratio`
+
+These signals are written into the structured monitoring outputs, surfaced in `proof_pack.py`, and intended to answer a simple question honestly: are we spending training compute on prompts that can still teach the model something?
+
+The task-diversity ratio is especially useful for procedural-environment training. It tells us whether the current rollout mix is spreading across environment families or collapsing into a narrow slice of tasks.
+
+### Verifier-attack tripwires
+
+The held-out tripwire suite now includes explicit verifier-attack analogs:
+
+- `gibberish_answer`
+- `adversarial_prefix`
+- `fake_self_certification`
+- `overlong_nonsense`
+- `format_jamming`
+
+These are eval-only cases intended to catch reward-hacking pressure against brittle verification logic before we trust a long GRPO run.
+
+### Judge mode split
+
+`judges/llm_grader.py` now reports:
+
+- deterministic verifier score
+- discriminative verifier slot
+- generative panel score
+
+The current repo still only ships a generative LLM panel, but it is now clearly separated and kept out of the main hybrid path unless explicitly enabled and the confidence / disagreement gates are satisfied.
 
 ## Training Stack
 
@@ -266,6 +334,18 @@ The training stack is intentionally conservative:
 - `datasets==4.8.4`
 - `matplotlib==3.10.0`
 - `wandb==0.26.0`
+
+## Stability Monitoring
+
+The training loop now tracks a small PPO/GRPO-style stability bundle in addition to reward:
+
+- approximate KL drift
+- adaptive beta / KL guardrail state
+- policy entropy from the trainer
+- decision entropy across sampled completions
+- unique completion ratio per batch
+
+This is meant to catch the classic failure mode where reward rises while the policy drifts into repetitive or over-optimized behavior.
 
 ## Event-Time Runbook
 
@@ -323,6 +403,7 @@ Training should leave us with:
 - `outputs/checkpoints/`
 - `outputs/warm_start/`
 - `outputs/monitoring/training_metrics.jsonl`
+- `outputs/monitoring/training_stability.jsonl`
 - `outputs/monitoring/latest_summary.json`
 - `outputs/monitoring/training_stack_versions.json`
 - `outputs/monitoring/rollout_audits/latest.md`
@@ -350,6 +431,7 @@ The final submission evidence needs all of these together:
 - reward curve
 - held-out report
 - held-out OOD slice
+- sampled Top-1 vs Best-of-K comparison
 - tripwire pass-rate report
 - per-misbehavior confusion matrix
 - proxy-gap summary
