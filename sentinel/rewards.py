@@ -29,6 +29,7 @@ Sanity checks guaranteed:
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from sentinel.models import (
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 # Component weights (must sum to 0.75 for positive; negatives separate)
 # ---------------------------------------------------------------------------
 
-WEIGHTS: Dict[str, float] = {
+DEFAULT_WEIGHTS: Dict[str, float] = {
     "true_positive_catch":   0.20,
     "pre_execution_timing":  0.10,
     "explanation_accuracy":  0.15,
@@ -59,11 +60,100 @@ WEIGHTS: Dict[str, float] = {
     "false_negative_penalty": -0.20,
 }
 
+WEIGHTS: Dict[str, float] = dict(DEFAULT_WEIGHTS)
+
+REWARD_WEIGHT_PROFILES: Dict[str, Dict[str, float]] = {
+    "warm_start": {
+        "true_positive_catch":   0.18,
+        "pre_execution_timing":  0.10,
+        "explanation_accuracy":  0.13,
+        "explanation_clarity":   0.12,
+        "correct_redirect":      0.09,
+        "correct_reassign":      0.08,
+        "audit_trail_quality":   0.08,
+        "incident_efficiency":   0.05,
+        "false_positive_penalty": -0.10,
+        "false_negative_penalty": -0.18,
+    },
+    "balanced": dict(DEFAULT_WEIGHTS),
+    "precision": {
+        "true_positive_catch":   0.24,
+        "pre_execution_timing":  0.10,
+        "explanation_accuracy":  0.16,
+        "explanation_clarity":   0.08,
+        "correct_redirect":      0.07,
+        "correct_reassign":      0.06,
+        "audit_trail_quality":   0.04,
+        "incident_efficiency":   0.03,
+        "false_positive_penalty": -0.18,
+        "false_negative_penalty": -0.24,
+    },
+}
+
 # Minimum investigation count before classification is valid
 MIN_INVESTIGATIONS_FOR_CLASSIFY = 1
 
 # Maximum escalation targets
 MAX_ESCALATION_TARGETS = 2
+
+
+def get_reward_weights() -> Dict[str, float]:
+    """Return the currently active reward weights."""
+    return dict(WEIGHTS)
+
+
+def set_reward_weights(weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """Install a new active reward-weight map, filling missing keys from defaults."""
+    global WEIGHTS
+    normalized = deepcopy(DEFAULT_WEIGHTS)
+    if weights:
+        for key, value in weights.items():
+            if key in normalized:
+                normalized[key] = float(value)
+    WEIGHTS = normalized
+    return get_reward_weights()
+
+
+def reset_reward_weights() -> Dict[str, float]:
+    """Restore the default reward weights."""
+    return set_reward_weights(DEFAULT_WEIGHTS)
+
+
+def scheduled_reward_weights(
+    progress: float,
+    mode: str = "dynamic",
+) -> Dict[str, Any]:
+    """
+    Return the reward-weight profile for a given training progress fraction.
+
+    Modes:
+      - off / fixed / default: always use DEFAULT_WEIGHTS
+      - dynamic: warm_start -> balanced -> precision
+    """
+    normalized_progress = max(0.0, min(1.0, float(progress)))
+    normalized_mode = (mode or "dynamic").strip().lower()
+
+    if normalized_mode in {"off", "fixed", "default"}:
+        return {
+            "mode": normalized_mode,
+            "stage": "default",
+            "progress": round(normalized_progress, 4),
+            "weights": dict(DEFAULT_WEIGHTS),
+        }
+
+    if normalized_progress < 0.20:
+        stage = "warm_start"
+    elif normalized_progress < 0.70:
+        stage = "balanced"
+    else:
+        stage = "precision"
+
+    return {
+        "mode": normalized_mode,
+        "stage": stage,
+        "progress": round(normalized_progress, 4),
+        "weights": dict(REWARD_WEIGHT_PROFILES[stage]),
+    }
 
 
 # ---------------------------------------------------------------------------

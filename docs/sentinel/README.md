@@ -155,6 +155,11 @@ Training is in `train.py` and uses:
 - adversarial worker-case sampling
 - deterministic reward components with optional LLM panel
 
+Authoritative training recipe:
+
+- `docs/sentinel/training-readme.md`
+- default model: `unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit`
+
 ### Warm Start
 
 The repo now supports a small warm-start stage before GRPO.
@@ -177,6 +182,8 @@ Training now writes structured metrics to:
 
 - `outputs/monitoring/training_metrics.jsonl`
 - `outputs/monitoring/latest_summary.json`
+- `outputs/monitoring/training_stack_versions.json`
+- `outputs/monitoring/rollout_audits/latest.md`
 
 These logs include:
 
@@ -187,6 +194,8 @@ These logs include:
 - false positive rate
 - risk reduction rate
 - worker rehabilitation rate
+- reward schedule stage / progress
+- periodic rollout-audit samples for human inspection
 
 ## Proof Pack
 
@@ -213,7 +222,36 @@ Artifacts land under:
 - `outputs/proof_pack/policy_metadata.json`
 - `outputs/proof_pack/reward_curve_status.json`
 - `outputs/proof_pack/monitoring_snapshot.json`
+- `outputs/proof_pack/held_out_eval_snapshot.json`
+- `outputs/proof_pack/proxy_gap_summary.json`
 - `outputs/proof_pack/trajectories/`
+
+Held-out evaluation is exported separately with:
+
+```bash
+python scripts/eval_sentinel.py \
+  --baseline-checkpoint outputs/warm_start/final \
+  --candidate-checkpoint outputs/checkpoints/final
+```
+
+This writes:
+
+- `outputs/evals/sentinel_held_out_report.json`
+- `outputs/evals/sentinel_held_out_report.md`
+
+The held-out report now includes:
+
+- main held-out seed slice
+- separate OOD seed slice
+- reward tripwire evaluation
+- per-misbehavior confusion matrix
+
+The tripwire suite now includes additional tampering-style checks such as metric spoofing, audit-log laundering, fabricated evidence, and alert suppression.
+
+The proof pack now adds:
+
+- a proxy-gap summary so training reward can be compared directly against held-out behavior
+- automatically ranked top failure modes quoted directly in `outputs/proof_pack/summary.md`
 
 ## Suggested Training Flow
 
@@ -227,6 +265,12 @@ USE_SENTINEL=1 WARM_START_STEPS=20 python train.py --dry-run
 
 # run the real training once credits are available
 USE_SENTINEL=1 TRAIN_STEPS=300 WARM_START_STEPS=20 python train.py
+
+# inspect periodic rollout audits during training
+type outputs\\monitoring\\rollout_audits\\latest.md
+
+# export held-out checkpoint evaluation
+python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final
 
 # export proof artifacts
 python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final
@@ -247,6 +291,7 @@ The cleanest demo sequence is:
 
 Tracked public docs:
 
+- [Training README](training-readme.md)
 - [Public Architecture Overview](public-overview.md)
 - [OpenEnv RL Guide Alignment](openenv-guide-alignment.md)
 - [Submission Readiness](submission-readiness.md)
@@ -273,6 +318,15 @@ What is fully real now:
 - feedback memory
 - checkpoint-aware proof-pack support
 - structured training monitoring
+- rollout-audit sampling
+- held-out evaluation report
+- reward tripwire evaluation suite
+- held-out OOD evaluation slice
+- per-misbehavior confusion matrix
+- proxy-gap summary
+- top failure modes summary
+- dynamic reward-weight scheduling
+- pinned training stack versions
 - small warm-start option
 
 What still needs the actual long run:

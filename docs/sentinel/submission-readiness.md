@@ -94,7 +94,13 @@ Required proof package:
 - Run a baseline or early checkpoint and save detection rate / score.
 - Run `USE_SENTINEL=1 WARM_START_STEPS=20 TRAIN_STEPS=300 python train.py`.
 - Save `outputs/monitoring/latest_summary.json` and `outputs/monitoring/training_metrics.jsonl`.
+- Save `outputs/monitoring/training_stack_versions.json` and `outputs/monitoring/rollout_audits/latest.md`.
+- Run `python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
+- Save the tripwire and OOD sections from `outputs/evals/sentinel_held_out_report.md`.
+- Save the per-misbehavior confusion matrix from `outputs/evals/sentinel_held_out_report.json`.
+- Save `outputs/proof_pack/proxy_gap_summary.json`.
+- Save `outputs/proof_pack/top_failure_modes.json` and quote the top 2-3 failures in the pitch notes.
 - Save `outputs/reward_curves/training_curve.png`.
 - Show before/after examples from `outputs/proof_pack/trajectories/`:
   - Before: approves reward-hacking or hallucination.
@@ -180,7 +186,13 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Show one reassignment driven by worker/global feedback memory.
 - [ ] Run or simulate the 300-step SENTINEL training path.
 - [ ] Save `outputs/monitoring/latest_summary.json`.
+- [ ] Save `outputs/monitoring/training_stack_versions.json`.
+- [ ] Save one human-readable rollout audit sample from `outputs/monitoring/rollout_audits/`.
+- [ ] Run `python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - [ ] Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
+- [ ] Save the tripwire pass-rate summary and at least one passing and one failing tripwire example.
+- [ ] Save the candidate per-misbehavior confusion matrix.
+- [ ] Save the proxy-gap summary and quote one line from it in the pitch notes.
 - [ ] Save a reward curve image.
 - [ ] Curate 2-3 before/after trajectories from the exported proof pack.
 - [ ] Record a sub-2-minute video or HF mini-blog.

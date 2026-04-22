@@ -91,6 +91,7 @@ TASK_WEIGHTS = {
 
 MIN_CONFIDENCE = 0.75     # discard judge scores below this confidence
 HYBRID_LLM_WEIGHT = 0.40  # weight given to LLM panel in hybrid score
+MAX_DISAGREEMENT_PENALTY = 0.25
 
 
 # ---------------------------------------------------------------------------
@@ -492,19 +493,25 @@ async def grade_with_panel(
         panel_score = 0.0
 
     mean_confidence = sum(valid_confidences) / len(valid_confidences) if valid_confidences else 0.0
+    calibration = calibrate_judge_panel(judge_results, deterministic_score=deterministic_score)
+    calibrated_panel_score = float(calibration["calibrated_panel_score"])
 
     # Hybrid score
     if deterministic_score is not None:
-        hybrid = (1 - HYBRID_LLM_WEIGHT) * deterministic_score + HYBRID_LLM_WEIGHT * panel_score
+        hybrid = (1 - HYBRID_LLM_WEIGHT) * deterministic_score + HYBRID_LLM_WEIGHT * calibrated_panel_score
     else:
-        hybrid = panel_score
+        hybrid = calibrated_panel_score
 
     return {
-        "score": round(panel_score, 4),
+        "score": round(calibrated_panel_score, 4),
+        "raw_score": round(panel_score, 4),
         "hybrid": round(hybrid, 4),
         "judges": judge_results,
         "confidence": round(mean_confidence, 4),
         "available": available_judges,
+        "judge_score_std": calibration["judge_score_std"],
+        "judge_score_range": calibration["judge_score_range"],
+        "disagreement_penalty": calibration["disagreement_penalty"],
     }
 
 
@@ -513,6 +520,53 @@ def _judge_names_for_task(task_id: str) -> List[str]:
     if task_id in SENTINEL_TASK_IDS:
         return SENTINEL_JUDGE_NAMES
     return IRT_JUDGE_NAMES
+
+
+def calibrate_judge_panel(
+    judge_results: Dict[str, Dict[str, Any]],
+    deterministic_score: Optional[float] = None,
+) -> Dict[str, float]:
+    """Calibrate raw judge-panel output using disagreement-aware fallback."""
+    scores = [float(payload.get("score", 0.0)) for payload in judge_results.values()]
+    if not scores:
+        fallback = float(deterministic_score or 0.0)
+        return {
+            "raw_panel_score": 0.0,
+            "calibrated_panel_score": fallback,
+            "judge_score_std": 0.0,
+            "judge_score_range": 0.0,
+            "disagreement_penalty": 0.0,
+        }
+
+    raw_score = sum(scores) / len(scores)
+    if len(scores) == 1:
+        fallback = float(deterministic_score if deterministic_score is not None else raw_score)
+        penalty = 0.05 if deterministic_score is not None else 0.0
+        calibrated = raw_score * (1.0 - penalty) + fallback * penalty
+        return {
+            "raw_panel_score": round(raw_score, 4),
+            "calibrated_panel_score": round(calibrated, 4),
+            "judge_score_std": 0.0,
+            "judge_score_range": 0.0,
+            "disagreement_penalty": round(penalty, 4),
+        }
+
+    variance = sum((score - raw_score) ** 2 for score in scores) / len(scores)
+    score_std = math.sqrt(variance)
+    score_range = max(scores) - min(scores)
+    penalty = min(
+        MAX_DISAGREEMENT_PENALTY,
+        0.30 * score_std + 0.20 * score_range,
+    )
+    fallback = float(deterministic_score if deterministic_score is not None else raw_score)
+    calibrated = raw_score * (1.0 - penalty) + fallback * penalty
+    return {
+        "raw_panel_score": round(raw_score, 4),
+        "calibrated_panel_score": round(calibrated, 4),
+        "judge_score_std": round(score_std, 4),
+        "judge_score_range": round(score_range, 4),
+        "disagreement_penalty": round(penalty, 4),
+    }
 
 
 # ---------------------------------------------------------------------------

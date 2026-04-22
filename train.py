@@ -11,13 +11,13 @@ HOW TO RUN:
     USE_UNSLOTH=1 python train.py
 
     # Override model and steps:
-    MODEL_NAME=Qwen/Qwen2.5-7B-Instruct TRAIN_STEPS=200 python train.py
+    MODEL_NAME=unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit TRAIN_STEPS=200 python train.py
 
     # Resume from checkpoint:
     RESUME_FROM=outputs/checkpoints/checkpoint-100 python train.py
 
 ENV VARS:
-    MODEL_NAME      HuggingFace model ID (default: Qwen/Qwen2.5-3B-Instruct)
+    MODEL_NAME      HuggingFace model ID (default: unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit)
     HF_TOKEN        HuggingFace token (for gated models)
     GROQ_API_KEY    Groq API key (for LLM judge panel, optional)
     WANDB_PROJECT   W&B project name (optional, set to "" to disable)
@@ -41,9 +41,11 @@ import json
 import logging
 import math
 import os
+import platform
 import sys
 import time
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -55,7 +57,7 @@ from torch.utils.data import Dataset as TorchDataset
 # Config from env vars
 # ---------------------------------------------------------------------------
 
-MODEL_NAME      = os.getenv("MODEL_NAME", "unsloth/Qwen2.5-3B-bnb-4bit")
+MODEL_NAME      = os.getenv("MODEL_NAME", "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit")
 HF_TOKEN        = os.getenv("HF_TOKEN", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 WANDB_PROJECT   = os.getenv("WANDB_PROJECT", "openenv-grpo")
@@ -87,6 +89,10 @@ WARM_START_LR = float(os.getenv("WARM_START_LR", "2e-5"))
 WARM_START_DATASET_SIZE = int(os.getenv("WARM_START_DATASET_SIZE", "24"))
 WARM_START_OUTPUT_DIR = os.getenv("WARM_START_OUTPUT_DIR", "outputs/warm_start")
 WARM_START_ONLY = os.getenv("WARM_START_ONLY", "0") == "1"
+ROLLOUT_AUDIT_DIR = os.getenv("ROLLOUT_AUDIT_DIR", os.path.join(TRAIN_MONITOR_DIR, "rollout_audits"))
+ROLLOUT_AUDIT_EVERY = int(os.getenv("ROLLOUT_AUDIT_EVERY", "10"))
+ROLLOUT_AUDIT_SAMPLES = int(os.getenv("ROLLOUT_AUDIT_SAMPLES", "2"))
+REWARD_SCHEDULE_MODE = os.getenv("REWARD_SCHEDULE_MODE", "dynamic")
 
 TASK_IDS = [
     "severity_classification",
@@ -118,6 +124,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _package_version(name: str) -> str:
+    try:
+        return importlib_metadata.version(name)
+    except importlib_metadata.PackageNotFoundError:
+        return "missing"
+
+
+def collect_training_stack_versions() -> Dict[str, Any]:
+    cuda_available = torch.cuda.is_available()
+    return {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "model_name": MODEL_NAME,
+        "use_unsloth": USE_UNSLOTH,
+        "cuda_available": cuda_available,
+        "bf16_available": bool(cuda_available and torch.cuda.is_bf16_supported()),
+        "train_steps": TRAIN_STEPS,
+        "warm_start_steps": WARM_START_STEPS,
+        "reward_schedule_mode": REWARD_SCHEDULE_MODE,
+        "packages": {
+            "torch": getattr(torch, "__version__", "missing"),
+            "bitsandbytes": _package_version("bitsandbytes"),
+            "transformers": _package_version("transformers"),
+            "peft": _package_version("peft"),
+            "trl": _package_version("trl"),
+            "datasets": _package_version("datasets"),
+            "matplotlib": _package_version("matplotlib"),
+            "wandb": _package_version("wandb"),
+            "openenv-core": _package_version("openenv-core"),
+            "unsloth": _package_version("unsloth"),
+        },
+    }
+
 # ---------------------------------------------------------------------------
 # W&B setup (optional)
 # ---------------------------------------------------------------------------
@@ -138,7 +178,10 @@ if wandb_enabled:
         logger.info("W&B enabled: project=%s", WANDB_PROJECT)
     except ImportError:
         wandb_enabled = False
-        logger.warning("wandb not installed â€” logging disabled")
+        logger.warning("wandb not installed -- logging disabled")
+    except Exception as exc:
+        wandb_enabled = False
+        logger.warning("wandb init skipped: %s", exc)
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -806,10 +849,17 @@ class TrainingMonitor:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_path = self.output_dir / "training_metrics.jsonl"
         self.summary_path = self.output_dir / "latest_summary.json"
+        self.stack_path = self.output_dir / "training_stack_versions.json"
         self.batch_index = 0
         self.running_reward_total = 0.0
         self.running_batch_count = 0
         self.best_reward_mean = float("-inf")
+
+    def write_stack_versions(self, stack_versions: Dict[str, Any]) -> None:
+        self.stack_path.write_text(
+            json.dumps(stack_versions, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def log_batch(
         self,
@@ -819,6 +869,7 @@ class TrainingMonitor:
         variant_seeds: List[int],
         curriculum_summary: Optional[Dict[str, Any]],
         prompt_refreshes: int,
+        reward_schedule: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         self.batch_index += 1
         metrics = _aggregate_batch_metrics(
@@ -835,6 +886,8 @@ class TrainingMonitor:
             if any(task_id in SENTINEL_TASK_IDS for task_id in task_ids)
             else "irt"
         )
+        if reward_schedule:
+            metrics["reward_schedule"] = reward_schedule
 
         self.running_batch_count += 1
         self.running_reward_total += metrics["reward_mean"]
@@ -854,6 +907,151 @@ class TrainingMonitor:
             encoding="utf-8",
         )
         return metrics
+
+
+def _truncate_text(text: str, limit: int = 700) -> str:
+    clean = (text or "").strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _audit_priority(task_id: str, reward: float, history: List[Dict[str, Any]]) -> float:
+    priority = max(0.0, 1.0 - float(reward))
+    if task_id in SENTINEL_TASK_IDS:
+        rollup = _summarize_sentinel_history(history)
+        priority += rollup["false_negatives"] * 2.0
+        priority += rollup["false_positives"] * 1.5
+        priority += (1.0 - rollup["risk_reduction_rate"]) * 0.8
+        priority += rollup["revision_attempts"] * 0.25
+    else:
+        priority += len(history) * 0.05
+    return round(priority, 4)
+
+
+class RolloutAuditSampler:
+    """Persist a periodic sample of rollout traces for human audit during training."""
+
+    def __init__(self, output_dir: str, every: int, sample_limit: int) -> None:
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.every = max(0, every)
+        self.sample_limit = max(0, sample_limit)
+        self.latest_markdown_path = self.output_dir / "latest.md"
+
+    def record_batch(
+        self,
+        *,
+        batch_index: int,
+        prompts: List[str],
+        completions: List[str],
+        rewards: List[float],
+        histories: List[List[Dict[str, Any]]],
+        task_ids: List[str],
+        variant_seeds: List[int],
+        monitor_summary: Dict[str, Any],
+        reward_schedule: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        if self.every <= 0 or self.sample_limit <= 0:
+            return None
+        if batch_index % self.every != 0:
+            return None
+
+        candidates: List[Dict[str, Any]] = []
+        for index, reward in enumerate(rewards):
+            task_id = str(task_ids[index]) if index < len(task_ids) else ACTIVE_TASK_IDS[0]
+            variant_seed = int(variant_seeds[index]) if index < len(variant_seeds) else 0
+            history = histories[index] if index < len(histories) else []
+            history_summary = (
+                _summarize_sentinel_history(history)
+                if task_id in SENTINEL_TASK_IDS
+                else {"steps": float(len(history))}
+            )
+            candidates.append(
+                {
+                    "task_id": task_id,
+                    "variant_seed": variant_seed,
+                    "reward": round(float(reward), 4),
+                    "priority": _audit_priority(task_id, reward, history),
+                    "prompt": prompts[index] if index < len(prompts) else "",
+                    "completion": completions[index] if index < len(completions) else "",
+                    "history_summary": history_summary,
+                    "history": history,
+                }
+            )
+
+        top_samples = sorted(
+            candidates,
+            key=lambda item: (item["priority"], item["reward"]),
+            reverse=True,
+        )[: self.sample_limit]
+
+        payload = {
+            "batch_index": batch_index,
+            "reward_schedule": reward_schedule or {},
+            "monitor_summary": monitor_summary,
+            "samples": top_samples,
+        }
+        json_path = self.output_dir / f"batch_{batch_index:04d}.json"
+        json_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+
+        lines = [
+            f"# Rollout Audit Batch {batch_index}",
+            "",
+            f"- Samples: {len(top_samples)}",
+            f"- Reward mean: {monitor_summary.get('reward_mean', 0.0):.4f}",
+            f"- Running reward mean: {monitor_summary.get('running_reward_mean', 0.0):.4f}",
+        ]
+        if reward_schedule:
+            lines.append(
+                f"- Reward schedule: {reward_schedule.get('stage', 'unknown')} ({reward_schedule.get('mode', 'unknown')})"
+            )
+        lines.append("")
+
+        for sample_index, sample in enumerate(top_samples, start=1):
+            history_summary = sample.get("history_summary") or {}
+            lines.extend(
+                [
+                    f"## Sample {sample_index}",
+                    "",
+                    f"- Task: `{sample['task_id']}`",
+                    f"- Seed: `{sample['variant_seed']}`",
+                    f"- Reward: `{sample['reward']:.4f}`",
+                    f"- Audit priority: `{sample['priority']:.4f}`",
+                ]
+            )
+            if "detection_rate" in history_summary:
+                lines.extend(
+                    [
+                        f"- Detection rate: `{history_summary.get('detection_rate', 0.0):.4f}`",
+                        f"- False positive rate: `{history_summary.get('false_positive_rate', 0.0):.4f}`",
+                        f"- Risk reduction rate: `{history_summary.get('risk_reduction_rate', 0.0):.4f}`",
+                        f"- Rehabilitation rate: `{history_summary.get('worker_rehabilitation_rate', 0.0):.4f}`",
+                    ]
+                )
+            lines.extend(
+                [
+                    "",
+                    "### Prompt",
+                    "",
+                    "```text",
+                    _truncate_text(str(sample.get("prompt", ""))),
+                    "```",
+                    "",
+                    "### Completion",
+                    "",
+                    "```json",
+                    _truncate_text(str(sample.get("completion", ""))),
+                    "```",
+                    "",
+                ]
+            )
+
+        self.latest_markdown_path.write_text("\n".join(lines), encoding="utf-8")
+        return str(json_path)
 
 
 class WarmStartDataset(TorchDataset):
@@ -1469,6 +1667,12 @@ def train():
     logger.info("LLM panel:  %s", USE_LLM_PANEL)
     logger.info("Curriculum: %s", USE_CURRICULUM)
     logger.info("Warm start: %s", WARM_START_STEPS if WARM_START_STEPS > 0 else "disabled")
+    logger.info("Reward schedule: %s", REWARD_SCHEDULE_MODE if USE_SENTINEL else "n/a")
+    logger.info(
+        "Rollout audit: every %s batch(es), %s sample(s)",
+        ROLLOUT_AUDIT_EVERY if ROLLOUT_AUDIT_EVERY > 0 else "disabled",
+        ROLLOUT_AUDIT_SAMPLES,
+    )
     logger.info("Output:     %s", OUTPUT_DIR)
     logger.info("=" * 60)
 
@@ -1486,6 +1690,7 @@ def train():
         record_episode_feedback,
         save_feedback_memory,
     )
+    from sentinel.rewards import reset_reward_weights, scheduled_reward_weights, set_reward_weights
 
     curriculum = get_curriculum(active_task_ids=ACTIVE_TASK_IDS) if USE_CURRICULUM else None
     memory     = load_agent_memory()
@@ -1507,6 +1712,12 @@ def train():
         total_samples=PROMPT_DATASET_SIZE,
     )
     training_monitor = TrainingMonitor(TRAIN_MONITOR_DIR)
+    training_monitor.write_stack_versions(collect_training_stack_versions())
+    rollout_auditor = RolloutAuditSampler(
+        output_dir=ROLLOUT_AUDIT_DIR,
+        every=ROLLOUT_AUDIT_EVERY,
+        sample_limit=ROLLOUT_AUDIT_SAMPLES,
+    )
 
     warm_start_summary: Optional[Dict[str, Any]] = None
     if WARM_START_STEPS > 0:
@@ -1544,6 +1755,15 @@ def train():
         t_ids   = kwargs.get("task_id", [ACTIVE_TASK_IDS[0]] * len(prompts))
         v_seeds = kwargs.get("variant_seed", [0] * len(prompts))
         adv_cases = kwargs.get("adversarial_case", [""] * len(prompts))
+        reward_schedule: Optional[Dict[str, Any]] = None
+        if USE_SENTINEL:
+            current_batch_index = training_monitor.batch_index + 1
+            progress = min(1.0, current_batch_index / max(1, TRAIN_STEPS))
+            reward_schedule = scheduled_reward_weights(
+                progress=progress,
+                mode=REWARD_SCHEDULE_MODE,
+            )
+            set_reward_weights(reward_schedule["weights"])
 
         rewards, histories = grpo_reward_fn(
             prompts      = prompts,
@@ -1583,6 +1803,18 @@ def train():
             variant_seeds=[int(seed) for seed in v_seeds],
             curriculum_summary=curriculum.summary() if curriculum else None,
             prompt_refreshes=prompt_state.prompt_refreshes,
+            reward_schedule=reward_schedule,
+        )
+        audit_path = rollout_auditor.record_batch(
+            batch_index=training_monitor.batch_index,
+            prompts=[str(prompt) for prompt in prompts],
+            completions=[str(completion) for completion in completions],
+            rewards=rewards,
+            histories=histories,
+            task_ids=[str(task_id) for task_id in t_ids],
+            variant_seeds=[int(seed) for seed in v_seeds],
+            monitor_summary=monitor_summary,
+            reward_schedule=reward_schedule,
         )
 
         if curriculum and curriculum.should_use_adversarial():
@@ -1631,6 +1863,15 @@ def train():
                         "monitor/worker_rehabilitation_rate": monitor_summary.get("worker_rehabilitation_rate", 0.0),
                     }
                 )
+            if reward_schedule:
+                wandb_payload.update(
+                    {
+                        "monitor/reward_schedule_progress": reward_schedule.get("progress", 0.0),
+                        "monitor/reward_schedule_stage": reward_schedule.get("stage", "unknown"),
+                    }
+                )
+            if audit_path:
+                wandb_payload["monitor/rollout_audit_saved"] = 1
             wandb.log(wandb_payload)
 
         return rewards
@@ -1665,6 +1906,8 @@ def train():
         save_feedback_memory(feedback_memory, SENTINEL_FEEDBACK_MEMORY_PATH)
     if warm_start_summary:
         logger.info("Warm-start summary: %s", warm_start_summary)
+    if USE_SENTINEL:
+        reset_reward_weights()
 
     # Plot reward curve
     _plot_reward_curve()

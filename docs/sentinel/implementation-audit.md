@@ -6,7 +6,7 @@ This audit compares the current codebase against the local design intent and the
 
 SENTINEL is now a strong executable OpenEnv submission, not just a plan. The core oversight loop, worker fleet, scheduled misbehaviors, reward system, graders, training dry-run, counterfactual damage ledger, worker trust degradation, trust-gate auto-block, deterministic constitutional scoring, Sentinel-specific LLM judge routing, adversarial worker case training hooks, true 3-incident multi-crisis runtime, and worker/global feedback memory are implemented and tested.
 
-The remaining gaps are now mostly research-proof artifacts from a real long training run. The repo now includes `proof_pack.py`, which can export deterministic reference trajectories immediately, compare checkpoints once they exist, and copy the latest structured monitoring snapshot into the proof bundle.
+The remaining gaps are now mostly research-proof artifacts from a real long training run. The repo now includes `proof_pack.py`, which can export deterministic reference trajectories immediately, compare checkpoints once they exist, copy the latest structured monitoring snapshot into the proof bundle, surface the latest held-out evaluation report when present, and summarize proxy gaps between train-time reward and held-out behavior.
 
 ## Implemented
 
@@ -46,7 +46,12 @@ The remaining gaps are now mostly research-proof artifacts from a real long trai
 |---|---|---|
 | 300-episode reward curve | `proof_pack.py` can now read structured monitoring output first, then fall back to training logs. | Needs an actual long run or constrained proof run to make the curve meaningful. |
 | Before/after trajectories | `proof_pack.py` now supports checkpoint-aware comparisons under `outputs/proof_pack/trajectories/`. | Run it with warm-start and trained checkpoints, then curate the strongest 2-3 examples for the final pitch. |
-| Training monitoring artifacts | `train.py` now writes `outputs/monitoring/training_metrics.jsonl` and `outputs/monitoring/latest_summary.json`. | Capture screenshots / charts from a real run for the pitch deck. |
+| Training monitoring artifacts | `train.py` now writes `outputs/monitoring/training_metrics.jsonl`, `outputs/monitoring/latest_summary.json`, `outputs/monitoring/training_stack_versions.json`, and periodic rollout audits. | Capture screenshots / charts from a real run for the pitch deck. |
+| Held-out checkpoint evaluation | `scripts/eval_sentinel.py` now exports `outputs/evals/sentinel_held_out_report.json` and `.md` on a main held-out seed slice plus a separate OOD seed slice in eval mode. | Run it after warm-start and after the trained checkpoint, then surface the delta in the pitch deck. |
+| Tripwire reward-safety suite | The held-out report now includes policy-level tripwire tasks for confidence washing, rubric gaming, sycophancy-like pressure, trust-gate bypass, reward-tampering analogs, metric spoofing, audit-log laundering, fabricated evidence, and alert suppression. | Quote pass-rate and hard-failure counts in the pitch deck. |
+| Per-misbehavior confusion matrix | Held-out evaluation now exports per-misbehavior detection/miss/misclassification summaries. | Use it to show which failure modes improved and which still need work. |
+| Proxy-gap summary | `proof_pack.py` now exports `outputs/proof_pack/proxy_gap_summary.json` comparing train-time reward with held-out and OOD outcomes. | Use it to keep the proof story honest and catch Goodhart drift quickly. |
+| Top failure modes summary | `proof_pack.py` now exports `outputs/proof_pack/top_failure_modes.json` and quotes the top-ranked failures directly in `outputs/proof_pack/summary.md`. | Read this section verbatim in judge prep so weaknesses are surfaced honestly. |
 | Arms-race visualization | Case scoring and report data exist in `training/adversarial.py`. | Need optional chart image if the pitch uses the adaptive-worker story visually. |
 
 ## Not Yet Implemented
@@ -71,7 +76,7 @@ The codebase now has a usable backend, browser demo surface, trust gate, Sentine
 
 1. Run 300-episode training or a constrained proof run and rerun `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 2. Curate before/after trajectories for hallucination, reward hacking, and confidence washing, now including a corrective worker revision example.
-3. Use the new monitoring outputs to export screenshot-ready metrics for reward, detection rate, and rehabilitation.
+3. Use the new monitoring outputs to export screenshot-ready metrics for reward, detection rate, rehabilitation, and rollout-audit samples.
 4. Add an arms-race visualization if the pitch needs the adaptive-worker story as a chart instead of narration.
 5. Build the universal HF/OpenEnv oversight harness after the core proof artifacts are ready.
 

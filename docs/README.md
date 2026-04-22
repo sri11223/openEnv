@@ -5,6 +5,7 @@ This repository keeps supplementary docs under `docs/` so the repo root stays fo
 ## SENTINEL
 
 - [Overview](sentinel/README.md)
+- [Training README](sentinel/training-readme.md)
 - [Public Architecture Overview](sentinel/public-overview.md)
 - [Submission Readiness](sentinel/submission-readiness.md)
 - [Implementation Audit](sentinel/implementation-audit.md)
@@ -15,4 +16,3 @@ This repository keeps supplementary docs under `docs/` so the repo root stays fo
 ## Research Notes
 
 Research-focused notes remain under `winner_analysis/`.
-
