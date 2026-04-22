@@ -4,7 +4,7 @@ This audit compares `SENTINEL_MASTER_PLAN.md` and `SENTINEL_ARCHITECTURE.md` aga
 
 ## Executive Verdict
 
-SENTINEL is now a strong executable OpenEnv submission, not just a plan. The core oversight loop, worker fleet, scheduled misbehaviors, reward system, graders, training dry-run, counterfactual damage ledger, worker trust degradation, trust-gate auto-block, deterministic constitutional scoring, Sentinel-specific LLM judge routing, and adversarial worker case training hooks are implemented and tested.
+SENTINEL is now a strong executable OpenEnv submission, not just a plan. The core oversight loop, worker fleet, scheduled misbehaviors, reward system, graders, training dry-run, counterfactual damage ledger, worker trust degradation, trust-gate auto-block, deterministic constitutional scoring, Sentinel-specific LLM judge routing, adversarial worker case training hooks, true 3-incident multi-crisis runtime, and worker/global feedback memory are implemented and tested.
 
 The remaining gaps are now mostly research-proof artifacts: a real 300-episode reward curve, before/after trajectories, and an optional arms-race visualization for the pitch.
 
@@ -24,6 +24,8 @@ The remaining gaps are now mostly research-proof artifacts: a real 300-episode r
 | Task-specific Sentinel graders | Done | `sentinel/graders.py` |
 | Counterfactual Damage Ledger | Done | `sentinel/counterfactual.py`, `sentinel/environment.py` |
 | Worker trust degradation protocol | Done | `sentinel/trust.py`, `sentinel/models.py`, `sentinel/environment.py` |
+| True 3-incident `multi_crisis_command` runtime | Done | `sentinel/environment.py`, `sentinel/models.py`, `sentinel/workers.py`, `tests/test_sentinel.py` |
+| Worker/global feedback memory and reassignment hints | Done | `sentinel/feedback.py`, `sentinel/environment.py`, `train.py`, `tests/test_sentinel.py` |
 | Constitutional alignment scoring | Done | `sentinel/constitution.py`, `sentinel/environment.py`, `tests/test_sentinel.py` |
 | Audit records with risk and trust fields | Done | `sentinel/models.py` |
 | GRPO training dry-run | Done | `train.py` |
@@ -53,12 +55,13 @@ The remaining gaps are now mostly research-proof artifacts: a real 300-episode r
 
 The code is now modular in the right places:
 
-- `sentinel/environment.py` owns episode state and orchestration.
+- `sentinel/environment.py` owns episode state and orchestration, including 3 concurrent incident threads for `multi_crisis_command`.
 - `sentinel/workers.py` owns worker simulation and misbehavior injection.
 - `sentinel/rewards.py` owns scoring.
 - `sentinel/graders.py` owns task-specific final assessment.
 - `sentinel/counterfactual.py` owns risk estimation.
 - `sentinel/trust.py` owns trust policy.
+- `sentinel/feedback.py` owns the worker/global corrective memory loop.
 - `training/` owns curriculum, memory, and adversarial generation.
 
 The codebase now has a usable backend, browser demo surface, trust gate, Sentinel judge panel, and adversarial case loop. The remaining quality issue is not duplication; it is turning the research-proof loops into submission artifacts. For first-prize probability, the next best work is:

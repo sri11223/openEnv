@@ -112,9 +112,11 @@ class WorkerAgent:
     ) -> WorkerProposal:
         """Generate a proposal for this step (may be a misbehavior)."""
         available_services: List[str] = world_state.get("available_services", [])
-        investigated: List[str]       = world_state.get("investigated_services", [])
-        diagnosis: Optional[str]      = world_state.get("diagnosis")
-        severity_done: bool           = world_state.get("severity_classified") is not None
+        investigated: List[str] = world_state.get("investigated_services", [])
+        diagnosis: Optional[str] = world_state.get("diagnosis")
+        severity_done: bool = world_state.get("severity_classified") is not None
+        incident_id: Optional[str] = world_state.get("incident_id")
+        incident_label: Optional[str] = world_state.get("incident_label")
 
         # Check scheduled misbehavior
         if step_number in self._misbehavior_schedule:
@@ -127,6 +129,9 @@ class WorkerAgent:
             proposal = self._correct_action(
                 available_services, investigated, diagnosis, severity_done
             )
+
+        proposal.incident_id = incident_id
+        proposal.incident_label = incident_label
 
         # Record signature for loop detection
         sig = f"{proposal.action_type}:{proposal.target}"
@@ -400,6 +405,7 @@ class WorkerFleet:
         }
         self._queue: List[WorkerProposal] = []  # pending proposals
         self._step_index: int = 0
+        self._incident_index: int = 0
 
     def setup(
         self,
@@ -419,6 +425,7 @@ class WorkerFleet:
             agent.setup_episode(misbehavior_schedule=schedules.get(wid, {}))
         self._queue = []
         self._step_index = 0
+        self._incident_index = 0
 
     def _active_workers_for_task(self, task_id: str) -> List[WorkerId]:
         """Return the worker fleet size promised by each SENTINEL task."""
@@ -441,15 +448,16 @@ class WorkerFleet:
         self, world_state: Dict[str, Any], step_number: int
     ) -> WorkerProposal:
         """Return the next proposal, prioritising scheduled misbehavior turns."""
+        incident_context = self._select_incident_context(world_state, step_number)
         for wid in self._active_ids:
             agent = self._agents[wid]
             if step_number in agent._misbehavior_schedule:
-                return agent.propose_action(world_state, step_number)
+                return agent.propose_action(incident_context, step_number)
 
         # Otherwise round-robin through active workers.
         worker = self._agents[self._active_ids[self._step_index % len(self._active_ids)]]
         self._step_index += 1
-        return worker.propose_action(world_state, step_number)
+        return worker.propose_action(incident_context, step_number)
 
     def notify_decision(self, worker_id: WorkerId, record: WorkerRecord) -> None:
         """Update internal record after SENTINEL makes a decision."""
@@ -559,3 +567,45 @@ class WorkerFleet:
             for step, mtype in agent._misbehavior_schedule.items():
                 combined[(wid, step)] = mtype
         return combined
+
+    def _select_incident_context(
+        self,
+        world_state: Dict[str, Any],
+        step_number: int,
+    ) -> Dict[str, Any]:
+        """Pick which incident thread the next worker should act on.
+
+        In normal tasks there is only one incident, so the input world_state is
+        returned untouched. In multi-crisis mode we choose among the active
+        incident snapshots, prioritising neglected or unresolved threads.
+        """
+        incidents = world_state.get("incidents")
+        if not incidents:
+            return world_state
+
+        active = [
+            dict(incident)
+            for incident in incidents
+            if incident.get("incident_status") != "resolved"
+        ]
+        if not active:
+            return dict(incidents[0])
+
+        active.sort(
+            key=lambda incident: (
+                incident.get("severity_classified") is not None,
+                incident.get("diagnosis") is not None,
+                len(incident.get("investigated_services", [])),
+                incident.get("current_step", 0),
+                incident.get("incident_id", ""),
+            )
+        )
+
+        preferred = active[0]
+        if len(active) > 1:
+            preferred = active[self._incident_index % len(active)]
+            if preferred.get("severity_classified") is not None and preferred.get("diagnosis") is not None:
+                preferred = active[0]
+
+        self._incident_index += 1
+        return preferred

@@ -69,6 +69,10 @@ SENTINEL_ADVERSARIAL_PATH = os.getenv(
     "SENTINEL_ADVERSARIAL_PATH",
     "outputs/sentinel_adversarial_cases.json",
 )
+SENTINEL_FEEDBACK_MEMORY_PATH = os.getenv(
+    "SENTINEL_FEEDBACK_MEMORY_PATH",
+    "outputs/sentinel_feedback_memory.json",
+)
 
 TASK_IDS = [
     "severity_classification",
@@ -271,6 +275,7 @@ def build_grpo_dataset(
     max_seeds: int = 5,
     memory_context: str = "",
     memory: Optional[Dict[str, Any]] = None,
+    feedback_memory: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     """Build the list of {prompt: str} dicts for GRPOTrainer."""
     prompts = []
@@ -284,7 +289,7 @@ def build_grpo_dataset(
         env = SentinelEnv()
         
         for task_id in task_ids:
-            task_memory = _memory_context_for_task(memory, task_id, memory_context)
+            task_memory = _memory_context_for_task(memory, feedback_memory, task_id, memory_context)
             for seed in range(max_seeds):
                 try:
                     obs = env.reset(task_id, variant_seed=seed)
@@ -302,7 +307,7 @@ def build_grpo_dataset(
         if USE_SENTINEL_ADVERSARIAL:
             for case in _load_or_create_sentinel_adversarial_cases():
                 task_id = case.get("task_id", SENTINEL_TASK_IDS[0])
-                task_memory = _memory_context_for_task(memory, task_id, memory_context)
+                task_memory = _memory_context_for_task(memory, feedback_memory, task_id, memory_context)
                 prompts.append({
                     "prompt": sentinel_adversarial_case_to_prompt(case, task_memory),
                     "task_id": task_id,
@@ -314,7 +319,7 @@ def build_grpo_dataset(
         from src.scenarios import get_scenario
         
         for task_id in task_ids:
-            task_memory = _memory_context_for_task(memory, task_id, memory_context)
+            task_memory = _memory_context_for_task(memory, feedback_memory, task_id, memory_context)
             for seed in range(max_seeds):
                 try:
                     scenario = get_scenario(task_id, variant_seed=seed)
@@ -339,16 +344,35 @@ def build_grpo_dataset(
 
 def _memory_context_for_task(
     memory: Optional[Dict[str, Any]],
+    feedback_memory: Optional[Dict[str, Any]],
     task_id: str,
     fallback: str,
 ) -> str:
-    if memory is None:
-        return fallback
+    contexts: List[str] = []
     try:
         from training.memory import build_memory_context
-        return build_memory_context(memory, task_id=task_id) or fallback
+        if memory is not None:
+            memory_context = build_memory_context(memory, task_id=task_id)
+            if memory_context:
+                contexts.append(memory_context)
     except Exception:
-        return fallback
+        pass
+    try:
+        from sentinel.feedback import build_feedback_context
+        from sentinel.models import WorkerId
+        if feedback_memory is not None:
+            feedback_context = build_feedback_context(
+                feedback_memory,
+                task_id=task_id,
+                worker_ids=list(WorkerId),
+            )
+            if feedback_context:
+                contexts.append(feedback_context)
+    except Exception:
+        pass
+    if fallback:
+        contexts.append(fallback)
+    return "\n\n".join(part for part in contexts if part)
 
 
 def _load_or_create_sentinel_adversarial_cases() -> List[Dict[str, Any]]:
@@ -541,6 +565,48 @@ def _sentinel_history_entry(decision: Dict[str, Any], result) -> Dict[str, Any]:
     }
 
 
+def _trajectory_summary_from_history(task_id: str, history: List[Dict[str, Any]]) -> str:
+    if not history:
+        return f"No trajectory captured for {task_id}."
+    audits = [entry.get("audit") or {} for entry in history if entry.get("audit")]
+    latest = audits[-1] if audits else {}
+    caught = sum(1 for audit in audits if audit.get("was_misbehavior") and audit.get("sentinel_decision") != "APPROVE")
+    approved = sum(1 for audit in audits if audit.get("sentinel_decision") == "APPROVE")
+    last_incident = latest.get("incident_label") or latest.get("incident_id") or "incident"
+    return (
+        f"{task_id}: {len(history)} steps, {caught} unsafe proposals intercepted, "
+        f"{approved} approvals, latest thread {last_incident}."
+    )
+
+
+def _mistakes_from_history(task_id: str, history: List[Dict[str, Any]], score: float) -> List[str]:
+    audits = [entry.get("audit") or {} for entry in history if entry.get("audit")]
+    mistakes: List[str] = []
+    for audit in audits:
+        if audit.get("was_misbehavior") and audit.get("sentinel_decision") == "APPROVE":
+            mistakes.append(
+                f"Allowed {audit.get('reason') or 'unsafe_pattern'} from {audit.get('worker_id')} "
+                f"on {audit.get('incident_label') or audit.get('incident_id') or 'incident'}."
+            )
+    if not mistakes and score < 0.70:
+        mistakes.append(f"Low score on {task_id}; tighten oversight and reassignment choices.")
+    return mistakes[:3]
+
+
+def _successes_from_history(task_id: str, history: List[Dict[str, Any]], score: float) -> List[str]:
+    audits = [entry.get("audit") or {} for entry in history if entry.get("audit")]
+    successes: List[str] = []
+    for audit in audits:
+        if audit.get("was_misbehavior") and audit.get("sentinel_decision") in {"BLOCK", "REDIRECT", "REASSIGN", "FLAG"}:
+            successes.append(
+                f"Caught {audit.get('reason') or 'unsafe_pattern'} from {audit.get('worker_id')} "
+                f"on {audit.get('incident_label') or audit.get('incident_id') or 'incident'}."
+            )
+    if not successes and score >= 0.70:
+        successes.append(f"Maintained solid oversight discipline on {task_id}.")
+    return successes[:3]
+
+
 def _parse_action(text: str) -> Optional[Dict[str, Any]]:
     """Extract JSON action from model completion text."""
     text = text.strip()
@@ -678,10 +744,12 @@ def grpo_reward_fn(
     task_id:     List[str]       = None,
     variant_seed: List[int]      = None,
     adversarial_case: List[str]  = None,
+    return_histories: bool = False,
     **kwargs,
-) -> List[float]:
+) -> List[float] | Tuple[List[float], List[List[Dict[str, Any]]]]:
     """Called by GRPOTrainer after generating each group of completions."""
     rewards = []
+    histories: List[List[Dict[str, Any]]] = []
 
     for i, (prompt, completion) in enumerate(zip(prompts, completions)):
         t_id  = (task_id[i]       if task_id       else ACTIVE_TASK_IDS[0])
@@ -704,6 +772,7 @@ def grpo_reward_fn(
                 logger.debug("LLM panel failed, using deterministic score: %s", e)
 
         rewards.append(float(np.clip(score, 0.0, 1.0)))
+        histories.append(history)
 
     mean_r = sum(rewards) / len(rewards) if rewards else 0.0
     logger.info("Batch rewards: mean=%.3f min=%.3f max=%.3f",
@@ -718,6 +787,8 @@ def grpo_reward_fn(
             "reward/std":  float(np.std(rewards)) if rewards else 0,
         })
 
+    if return_histories:
+        return rewards, histories
     return rewards
 
 
@@ -748,9 +819,15 @@ def train():
         load_agent_memory, build_memory_context, maybe_consolidate_memory,
         record_episode as mem_record_episode, save_agent_memory,
     )
+    from sentinel.feedback import (
+        load_feedback_memory,
+        record_episode_feedback,
+        save_feedback_memory,
+    )
 
     curriculum = get_curriculum() if USE_CURRICULUM else None
     memory     = load_agent_memory()
+    feedback_memory = load_feedback_memory(SENTINEL_FEEDBACK_MEMORY_PATH)
     memory_ctx = build_memory_context(memory)
     _mem_counter = [0]   # mutable counter accessible in closure
 
@@ -760,6 +837,7 @@ def train():
         max_seeds=5,
         memory_context=memory_ctx,
         memory=memory,
+        feedback_memory=feedback_memory,
     )
 
     # Convert to HuggingFace Dataset
@@ -795,38 +873,45 @@ def train():
         v_seeds = kwargs.get("variant_seed", [0] * len(prompts))
         adv_cases = kwargs.get("adversarial_case", [""] * len(prompts))
 
-        rewards = grpo_reward_fn(
+        rewards, histories = grpo_reward_fn(
             prompts      = prompts,
             completions  = completions,
             task_id      = t_ids,
             variant_seed = v_seeds,
             adversarial_case = adv_cases,
+            return_histories = True,
             **{k: v for k, v in kwargs.items() if k not in ("task_id", "variant_seed", "adversarial_case")},
         )
 
         # Record in curriculum AND memory
         if curriculum:
             for i, r in enumerate(rewards):
-                t_id = t_ids[i] if i < len(t_ids) else TASK_IDS[0]
+                t_id = t_ids[i] if i < len(t_ids) else ACTIVE_TASK_IDS[0]
                 seed = v_seeds[i] if i < len(v_seeds) else 0
+                history = histories[i] if i < len(histories) else []
                 curriculum.record_episode(t_id, seed, score=r, steps=10)
                 
                 # Record in memory for cross-episode learning
                 episode_data = {
                     "task_id": t_id,
                     "score": r,
-                    "steps": 10,
-                    "trajectory_summary": f"GRPO episode on {t_id}",
-                    "mistakes": [] if r >= 0.70 else ["Low score - need better oversight"],
-                    "successes": ["Good oversight decisions"] if r >= 0.70 else [],
+                    "steps": len(history) or 10,
+                    "trajectory_summary": _trajectory_summary_from_history(t_id, history),
+                    "mistakes": _mistakes_from_history(t_id, history, r),
+                    "successes": _successes_from_history(t_id, history, r),
                 }
                 nonlocal memory
                 memory = mem_record_episode(memory, episode_data)
+                nonlocal feedback_memory
+                if USE_SENTINEL and history:
+                    feedback_memory = record_episode_feedback(feedback_memory, t_id, history)
                 _mem_counter[0] += 1
                 
                 # Save memory every 10 episodes
                 if _mem_counter[0] % 10 == 0:
                     save_agent_memory(memory)
+                    if USE_SENTINEL:
+                        save_feedback_memory(feedback_memory, SENTINEL_FEEDBACK_MEMORY_PATH)
                     memory = maybe_consolidate_memory(memory, GROQ_API_KEY if USE_LLM_PANEL else None)
 
             # Adversarial designer trigger

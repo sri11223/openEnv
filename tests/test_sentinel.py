@@ -18,6 +18,13 @@ from __future__ import annotations
 import pytest
 from sentinel.environment import SentinelEnv
 from sentinel.constitution import assess_constitutional_alignment
+from sentinel.feedback import (
+    build_feedback_context,
+    build_feedback_summary,
+    empty_feedback_memory,
+    record_feedback_event,
+    recommended_reassign_to,
+)
 from sentinel.models import (
     MisbehaviorType,
     SentinelDecision,
@@ -445,6 +452,100 @@ def test_worker_fleet_multi_crisis_all_types():
     }
     
     assert expected_types.issubset(all_types)
+
+
+def test_multi_crisis_command_exposes_three_live_incidents():
+    """multi_crisis_command should wrap three real IRT incident threads."""
+    env = SentinelEnv()
+    obs = env.reset("multi_crisis_command", variant_seed=0)
+
+    assert obs.active_incident_count == 3
+    assert len(obs.incident_snapshots) == 3
+    incident_ids = {snapshot.incident_id for snapshot in obs.incident_snapshots}
+    assert obs.proposed_action.incident_id in incident_ids
+    assert all(snapshot.current_step == 0 for snapshot in obs.incident_snapshots)
+
+
+def test_multi_crisis_routes_approved_action_to_selected_incident():
+    """Approving a proposal should only advance the incident thread it belongs to."""
+    env = SentinelEnv()
+    obs = env.reset("multi_crisis_command", variant_seed=0)
+    selected_incident = obs.proposed_action.incident_id
+
+    result = env.step({
+        "action": "APPROVE",
+        "reason": "safe",
+        "explanation": "Approving the selected worker proposal.",
+    })
+
+    state = env.state()
+    selected = next(
+        snapshot for snapshot in state.incident_snapshots
+        if snapshot.incident_id == selected_incident
+    )
+    others = [
+        snapshot for snapshot in state.incident_snapshots
+        if snapshot.incident_id != selected_incident
+    ]
+
+    assert selected.current_step == 1
+    assert all(snapshot.current_step == 0 for snapshot in others)
+    assert result.info["incident_id"] == selected_incident
+
+
+def test_feedback_memory_recommends_reassignment_target():
+    """Repeated caught mistakes should produce worker-specific reassignment hints."""
+    memory = empty_feedback_memory()
+    for _ in range(3):
+        memory = record_feedback_event(memory, {
+            "task_id": "fleet_monitoring_conflict",
+            "incident_id": "inc_1",
+            "incident_label": "Incident 1",
+            "worker_id": "worker_db",
+            "decision": "REASSIGN",
+            "reason": "scope_violation",
+            "action_type": "remediate",
+            "target": "payment-gateway",
+            "is_misbehavior": True,
+            "reassign_to": "worker_app",
+        })
+
+    summary = build_feedback_summary(
+        memory,
+        worker_id="worker_db",
+        task_id="fleet_monitoring_conflict",
+        available_workers=["worker_db", "worker_app"],
+    )
+    context = build_feedback_context(
+        memory,
+        task_id="fleet_monitoring_conflict",
+        worker_ids=["worker_db", "worker_app"],
+    )
+
+    assert recommended_reassign_to(memory, "worker_db", ["worker_db", "worker_app"]) == "worker_app"
+    assert summary["suggested_reassign_to"] == "worker_app"
+    assert "Best reassignment target so far: worker_app" in context
+
+
+def test_env_observation_surfaces_feedback_loop_memory():
+    """Live observations should include worker/global feedback memory after a caught mistake."""
+    env = SentinelEnv()
+    env.reset("basic_oversight", variant_seed=0)
+    env.step({
+        "action": "APPROVE",
+        "reason": "safe",
+        "explanation": "Valid first investigation.",
+    })
+    result = env.step({
+        "action": "BLOCK",
+        "reason": "hallucination",
+        "explanation": "Target is not in available_services, so this is hallucination.",
+    })
+
+    summary = result.observation.feedback_memory_summary
+    assert summary["global_mistakes"]
+    assert summary["worker_mistakes"]
+    assert "hallucination" in " ".join(summary["worker_mistakes"]).lower()
 
 
 # ---------------------------------------------------------------------------

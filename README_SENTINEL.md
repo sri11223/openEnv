@@ -275,9 +275,16 @@ pytest tests/test_env.py -v
 # SENTINEL environment tests (45 tests)
 pytest tests/test_sentinel.py -v
 
+# Current SENTINEL suite size
+# 49 tests
+
 # Validation checks (8 checks)
 python validate.py
 ```
+
+Recent additions:
+- True 3-incident `multi_crisis_command` runtime
+- Worker/global feedback memory with reassignment hints
 
 **Test coverage:**
 - ✅ All 7 IRT tasks

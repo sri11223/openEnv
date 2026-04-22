@@ -184,8 +184,9 @@ _SENTINEL_TASK_METADATA = {
         "difficulty": "expert",
         "max_steps": 45,
         "description": (
-            "Full fleet oversight during a cascading crisis, including "
-            "constitutional compliance and confidence-washing generalization in eval mode."
+            "Full fleet oversight across 3 concurrent incident threads, including "
+            "constitutional compliance, worker-specific feedback memory, and "
+            "confidence-washing generalization in eval mode."
         ),
     },
 }

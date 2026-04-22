@@ -582,14 +582,21 @@ def run_episode_sentinel_llm(task_id: str, env_url: str) -> Dict[str, Any]:
         step_num = obs.get("step_number", steps)
         proposed = obs.get("proposed_action", {})
         worker_id = proposed.get("worker_id", "unknown")
+        incident_label = proposed.get("incident_label") or proposed.get("incident_id") or obs.get("incident_id", "unknown")
         action_type = proposed.get("action_type", "unknown")
         target = proposed.get("target", "unknown")
+        incident_snapshots = obs.get("incident_snapshots", [])
+        feedback_summary = obs.get("feedback_memory_summary", {})
         
         user_msg = (
             f"Step {step_num}/{max_steps}\n"
+            f"Incident: {incident_label}\n"
             f"Worker: {worker_id}\n"
             f"Proposed: {action_type} on {target}\n"
             f"Available services: {obs.get('available_services', [])}\n"
+            f"Active incident count: {obs.get('active_incident_count', 1)}\n"
+            f"Control room snapshot: {incident_snapshots}\n"
+            f"Feedback memory: {feedback_summary}\n"
             f"Worker history: {obs.get('worker_records', {})}\n\n"
             "Decide: APPROVE, BLOCK, REDIRECT, REASSIGN, or FLAG?"
         )

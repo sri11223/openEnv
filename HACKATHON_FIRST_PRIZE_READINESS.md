@@ -43,6 +43,8 @@ Current strengths:
 - Constitutional alignment scoring in `sentinel/constitution.py`: every proposal is scored against five SRE safety principles before the audit record is written.
 - Counterfactual Damage Ledger: every decision estimates the harm that would have occurred if the worker action bypassed SENTINEL.
 - Trust gate auto-block: low-trust workers must provide supporting evidence before execution.
+- True 3-incident `multi_crisis_command`: the expert task now runs 3 concurrent incident threads, not a single wrapped incident.
+- Worker/global feedback memory: repeated worker mistakes now feed reassignment hints and corrective context in both runtime and training.
 - Four-worker fleet with hidden reliability in `sentinel/workers.py`.
 - Seven misbehavior types, including eval-only confidence washing.
 - Sentinel adversarial arms-race cases in `training/adversarial.py`.
@@ -167,6 +169,8 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Show one trust-gate auto-block with missing supporting evidence.
 - [ ] Show one audit entry with `constitutional_violations` and `constitutional_assessment`.
 - [ ] Show one Sentinel adversarial case scored through the arms-race helper.
+- [ ] Show one multi-crisis control-room state with 3 live incident snapshots.
+- [ ] Show one reassignment driven by worker/global feedback memory.
 - [ ] Run or simulate the 300-step SENTINEL training path.
 - [ ] Save a reward curve image.
 - [ ] Save 2-3 before/after trajectories.
