@@ -16,7 +16,7 @@ if _repo_root not in sys.path:
 
 
 def main() -> None:
-    """Start the OpenEnv incident-response-triage server."""
+    """Start the SENTINEL OpenEnv server."""
     import uvicorn  # noqa: PLC0415
 
     port = int(os.environ.get("PORT", 7860))
