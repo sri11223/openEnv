@@ -405,6 +405,12 @@ def _summarize_history(history: List[Dict[str, Any]]) -> Dict[str, Any]:
         sum(float(audit.get("allowed_damage_score") or 0.0) for audit in audits),
         4,
     )
+    twin_without_sentinel_damage = round(prevented_damage + allowed_damage, 4)
+    coaching_values = [
+        float(((entry.get("sentinel_reward") or {}).get("breakdown") or {}).get("coaching_quality"))
+        for entry in history
+        if ((entry.get("sentinel_reward") or {}).get("breakdown") or {}).get("coaching_quality") is not None
+    ]
     reasons = sorted(
         {
             audit.get("reason")
@@ -421,6 +427,14 @@ def _summarize_history(history: List[Dict[str, Any]]) -> Dict[str, Any]:
         "revisions_approved": revisions_approved,
         "prevented_damage_total": prevented_damage,
         "allowed_damage_total": allowed_damage,
+        "twin_without_sentinel_damage_total": twin_without_sentinel_damage,
+        "twin_with_sentinel_damage_total": allowed_damage,
+        "twin_prevented_damage_total": prevented_damage,
+        "twin_damage_reduction_rate": round(
+            prevented_damage / twin_without_sentinel_damage,
+            4,
+        ) if twin_without_sentinel_damage else 0.0,
+        "coaching_quality": round(sum(coaching_values) / len(coaching_values), 4) if coaching_values else 0.0,
         "reasons_seen": reasons,
     }
 
@@ -697,11 +711,15 @@ def export_proxy_gap_summary(
     training_detection = float(monitoring_snapshot.get("detection_rate", 0.0) or 0.0)
     training_fp = float(monitoring_snapshot.get("false_positive_rate", 0.0) or 0.0)
     training_risk = float(monitoring_snapshot.get("risk_reduction_rate", 0.0) or 0.0)
+    training_twin = float(monitoring_snapshot.get("twin_damage_reduction_rate", training_risk) or 0.0)
+    training_coaching = float(monitoring_snapshot.get("coaching_quality", 0.0) or 0.0)
 
     held_out_score = float(overall.get("candidate_mean_score", 0.0) or 0.0)
     held_out_detection = float(overall.get("candidate_detection_rate", 0.0) or 0.0)
     held_out_fp = float(overall.get("candidate_false_positive_rate", 0.0) or 0.0)
     held_out_risk = float(overall.get("candidate_risk_reduction_rate", 0.0) or 0.0)
+    held_out_twin = float(overall.get("candidate_twin_damage_reduction_rate", held_out_risk) or 0.0)
+    held_out_coaching = float(overall.get("candidate_coaching_quality", 0.0) or 0.0)
     ood_score = float(ood.get("candidate_mean_score", 0.0) or 0.0)
     ood_detection = float(ood.get("candidate_detection_rate", 0.0) or 0.0)
 
@@ -709,6 +727,8 @@ def export_proxy_gap_summary(
     detection_gap = round(training_detection - held_out_detection, 4)
     false_positive_gap = round(training_fp - held_out_fp, 4)
     risk_gap = round(training_risk - held_out_risk, 4)
+    twin_gap = round(training_twin - held_out_twin, 4)
+    coaching_gap = round(training_coaching - held_out_coaching, 4)
     ood_gap = round(held_out_score - ood_score, 4) if ood else 0.0
     ood_detection_gap = round(held_out_detection - ood_detection, 4) if ood else 0.0
 
@@ -733,6 +753,8 @@ def export_proxy_gap_summary(
         notes.append("Frontier hit rate is low in the latest batch; the adaptive curriculum may not be spending enough time near the capability frontier.")
     if float(monitoring_snapshot.get("task_diversity_ratio", 0.0) or 0.0) < 0.50 and monitoring_snapshot.get("batch_size"):
         notes.append("Task diversity ratio is low in the latest batch; training may be over-concentrating on too few environment families.")
+    if training_coaching < 0.55 and monitoring_snapshot.get("batch_size"):
+        notes.append("Coaching quality is low; blocked workers may not be receiving useful revision guidance.")
     if not notes:
         notes.append("Training and evaluation signals are reasonably aligned for a hackathon-scale run.")
 
@@ -750,6 +772,12 @@ def export_proxy_gap_summary(
         "training_risk_reduction_rate": round(training_risk, 4),
         "held_out_risk_reduction_rate": round(held_out_risk, 4),
         "risk_gap": risk_gap,
+        "training_twin_damage_reduction_rate": round(training_twin, 4),
+        "held_out_twin_damage_reduction_rate": round(held_out_twin, 4),
+        "twin_damage_gap": twin_gap,
+        "training_coaching_quality": round(training_coaching, 4),
+        "held_out_coaching_quality": round(held_out_coaching, 4),
+        "coaching_gap": coaching_gap,
         "approx_kl": round(float(monitoring_snapshot.get("approx_kl", 0.0) or 0.0), 6),
         "adaptive_beta": round(float(monitoring_snapshot.get("adaptive_beta", 0.0) or 0.0), 6),
         "decision_entropy": round(float(monitoring_snapshot.get("decision_entropy", 0.0) or 0.0), 4),
@@ -1077,6 +1105,8 @@ def write_markdown_summary(
             f"- Detection gap: {proxy_gap_summary.get('detection_gap', 0.0):+.4f}",
             f"- False-positive gap: {proxy_gap_summary.get('false_positive_gap', 0.0):+.4f}",
             f"- Risk-reduction gap: {proxy_gap_summary.get('risk_gap', 0.0):+.4f}",
+            f"- Twin damage-reduction gap: {proxy_gap_summary.get('twin_damage_gap', 0.0):+.4f}",
+            f"- Coaching-quality gap: {proxy_gap_summary.get('coaching_gap', 0.0):+.4f}",
             f"- Latest approx KL: {proxy_gap_summary.get('approx_kl', 0.0):.6f}",
             f"- Latest adaptive beta: {proxy_gap_summary.get('adaptive_beta', 0.0):.6f}",
             f"- Latest decision entropy: {proxy_gap_summary.get('decision_entropy', 0.0):.4f}",

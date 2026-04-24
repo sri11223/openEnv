@@ -12,6 +12,44 @@ SENTINEL is a first-prize caliber idea if the final submission proves three thin
 
 No honest project can guarantee first prize, but this repo has the right winning shape: a multi-agent OpenEnv environment where the trained agent supervises other agents before their actions execute.
 
+## Latest Judge Rubric Audit
+
+The updated rubric is good news for us. It rewards exactly the parts where
+SENTINEL is strongest: multi-agent behavior, long-horizon professional tasks,
+coherent reward design, and a story that non-specialists can understand.
+
+Current score estimate before real onsite training evidence:
+
+| Criterion | Weight | Current state | Risk |
+|---|---:|---|---|
+| Environment Innovation | 40% | Strong. SENTINEL is not a toy game; it trains an overseer for worker-agent fleets with hidden reliability, counterfactual damage, trust gates, corrective revision, and verifier tripwires. | Need to lead with SENTINEL everywhere, not the older incident-response framing. |
+| Storytelling | 30% | Strong if demo is simple: worker proposes, SENTINEL intercepts, counterfactual risk appears, worker revises. | README/video must stay narrative, not file-by-file API docs. |
+| Showing Improvement | 20% | Pipeline exists, proof pack exists, eval pack exists, and the repo now renders an 18-image training dashboard. | Main blocker: no real `outputs/monitoring/latest_summary.json` or `outputs/reward_curves/training_dashboard.md` from the final HF compute run yet. |
+| Reward/Training Pipeline | 10% | Strong. TRL GRPO, Qwen3-4B QLoRA, optional Unsloth, adaptive curriculum, KL guardrails, productive-signal metrics, tripwires, OOD eval. | Need a Colab or notebook-style quickstart that judges can rerun. |
+
+## OpenEnv Compliance Answer
+
+We did not originally create this repo by literally running `openenv init`.
+That is not fatal. Judges care whether the submission is OpenEnv-compliant,
+runnable, hosted, and trainable. The repo already has:
+
+- `openenv.yaml`
+- Docker Space config
+- `reset`, `step`, `state`, `grader`, `tasks`, and websocket endpoints
+- typed Pydantic action/observation/reward/state models
+- `openenv-core>=0.2.0` in runtime dependencies
+- `server/app.py` as a multi-mode entry point
+- `server/openenv_native.py`, a native OpenEnv `Environment` adapter mounted at `/openenv`
+- `notebooks/sentinel_qwen3_4b_grpo_colab.ipynb`, a Colab-friendly TRL/Unsloth training runner
+
+The remaining compliance tasks are operational:
+
+- confirm the HF Space has the latest commit and `/openenv/schema` works after Docker install
+- run the Colab notebook once on the final HF compute environment
+- run the actual Qwen3-4B HF training job onsite and commit/attach plots
+- render the training dashboard and memory ablation artifacts after the run
+- link the final HF Space, blog/video/slides, and reward plots from the root README
+
 ## Best Theme Fit
 
 Primary lane: Theme #1, Multi-Agent Interactions Environments.
@@ -42,11 +80,13 @@ Current strengths:
 - Pre-execution interception gate in `sentinel/environment.py`.
 - Constitutional alignment scoring in `sentinel/constitution.py`: every proposal is scored against five SRE safety principles before the audit record is written.
 - Counterfactual Damage Ledger: every decision estimates the harm that would have occurred if the worker action bypassed SENTINEL.
+- Counterfactual Twin Metrics: final reports compare damage without SENTINEL against damage after SENTINEL intervention.
 - Trust gate auto-block: low-trust workers must provide supporting evidence before execution.
 - True 3-incident `multi_crisis_command`: the expert task now runs 3 concurrent incident threads, not a single wrapped incident.
 - Worker/global feedback memory: repeated worker mistakes now feed reassignment hints and corrective context in both runtime and training.
 - Corrective supervision loop: blocked, redirected, and reassigned proposals can receive one worker revision pass before execution.
 - Worker rehabilitation metrics: the grade now reports revision attempts, revision successes, and rehabilitation rate.
+- Supervisor-as-coach reward: `coaching_quality` scores whether SENTINEL gives specific worker-facing recovery instructions.
 - Four-worker fleet with hidden reliability in `sentinel/workers.py`.
 - Seven misbehavior types, including eval-only confidence washing.
 - Sentinel adversarial arms-race cases in `training/adversarial.py`.
@@ -98,14 +138,23 @@ Required proof package:
 - Save `outputs/monitoring/training_stack_versions.json` and `outputs/monitoring/rollout_audits/latest.md`.
 - Quote `effective_prompt_ratio` and `frontier_hit_rate` from the monitoring snapshot so judges can see whether training stayed near the capability frontier.
 - Quote `task_diversity_ratio` too so judges can see whether training covered multiple environment families instead of collapsing into one easy slice.
+- Quote `zero_gradient_group_fraction` so judges can see we detected low-signal GRPO groups instead of blindly spending compute.
+- Quote scenario coverage from `scenario_counts` or show `outputs/reward_curves/06_scenario_coverage_heatmap.png`.
+- Quote `twin_without_sentinel_damage_total` vs `twin_with_sentinel_damage_total` to make the damage-prevention story concrete.
+- Quote `coaching_quality` beside `worker_rehabilitation_rate` to show SENTINEL is learning to coach, not only block.
 - Run `python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
+- Run `python scripts/run_memory_ablation.py --steps 50 --warm-start-steps 5` if compute allows.
+- Run `python scripts/render_training_dashboard.py --monitor-dir outputs/monitoring --output-dir outputs/reward_curves --eval-report outputs/evals/sentinel_held_out_report.json --memory-ablation outputs/monitoring/memory_ablation.json`.
 - Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - Save the tripwire and OOD sections from `outputs/evals/sentinel_held_out_report.md`.
 - Save the sampled Top-1 vs Best-of-K section from `outputs/evals/sentinel_held_out_report.md`.
 - Save the per-misbehavior confusion matrix from `outputs/evals/sentinel_held_out_report.json`.
 - Save `outputs/proof_pack/proxy_gap_summary.json`.
 - Save `outputs/proof_pack/top_failure_modes.json` and quote the top 2-3 failures in the pitch notes.
-- Save `outputs/reward_curves/training_curve.png`.
+- Save `outputs/reward_curves/training_dashboard.md`, `outputs/reward_curves/dashboard_manifest.json`, and the generated PNGs.
+- Show `outputs/reward_curves/15_learning_snapshots.png` for the 10 / 50 / 300 batch story.
+- Show `outputs/reward_curves/16_memory_ablation.png` with the caption "SENTINEL learns from its own oversight mistakes."
+- Show `outputs/reward_curves/17_zero_gradient_groups.png` for training efficiency.
 - Show before/after examples from `outputs/proof_pack/trajectories/`:
   - Before: approves reward-hacking or hallucination.
   - After: blocks with correct reason and evidence.
@@ -130,6 +179,11 @@ Evidence:
 - `train.py` supports HF TRL GRPO and optional Unsloth.
 - `train.py` now logs KL drift, adaptive beta, policy entropy, decision entropy, and unique completion ratio.
 - `train.py` now logs zero-reward fraction, trivially solved fraction, productive fraction, effective prompt ratio, and frontier hit rate.
+- `train.py` now logs scenario coverage, per-misbehavior coverage, memory summary, and zero-gradient group fraction.
+- `train.py` now logs twin-world damage metrics and coaching quality.
+- `training/memory.py` now stores structured mistake cards for repeated oversight errors.
+- `scripts/run_memory_ablation.py` produces the memory-on vs memory-off comparison.
+- `scripts/render_training_dashboard.py` produces the judge-facing plot dashboard.
 - `training/curriculum.py` now supports both adaptive frontier advance and adaptive ease-back based on success and failure thresholds.
 - `requirements-train.txt` installs the training stack.
 - `pyproject.toml` exposes a `train` optional dependency group.
@@ -181,6 +235,8 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Confirm `python validate.py` passes.
 - [ ] Confirm `python -m pytest tests -q` passes.
 - [ ] Confirm `/tasks` returns all 7 tasks.
+- [ ] Confirm `/openenv/schema` works on the HF Space.
+- [ ] Confirm `/openenv/metadata` identifies `sentinel-oversight-command`.
 - [ ] Confirm `/sentinel/dashboard` loads in the browser.
 - [ ] Confirm `/sentinel/intercept` blocks a confidence-washing proposal.
 - [ ] Confirm `/sentinel/stream?session_id=...&once=true` emits a Sentinel state event.
@@ -195,14 +251,19 @@ $env:USE_SENTINEL='1'; python train.py --dry-run
 - [ ] Run or simulate the 300-step SENTINEL training path.
 - [ ] Save `outputs/monitoring/latest_summary.json`.
 - [ ] Save `outputs/monitoring/training_stack_versions.json`.
+- [ ] Save `outputs/monitoring/memory_ablation.json` if the short ablation run fits the compute budget.
 - [ ] Save one human-readable rollout audit sample from `outputs/monitoring/rollout_audits/`.
 - [ ] Run `python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
+- [ ] Run `python scripts/render_training_dashboard.py --monitor-dir outputs/monitoring --output-dir outputs/reward_curves`.
 - [ ] Run `python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final`.
 - [ ] Save the sampled Top-1 vs Best-of-K comparison.
 - [ ] Save the tripwire pass-rate summary and at least one passing and one failing tripwire example.
 - [ ] Save the candidate per-misbehavior confusion matrix.
+- [ ] Save twin-world damage numbers from the dashboard or held-out report.
+- [ ] Save coaching-quality and worker-rehabilitation numbers together.
 - [ ] Save the proxy-gap summary and quote one line from it in the pitch notes.
-- [ ] Save a reward curve image.
+- [ ] Save the training dashboard images, especially reward, scenario coverage, memory ablation, zero-gradient groups, and 10 / 50 / 300 learning snapshots.
+- [ ] Run `notebooks/sentinel_qwen3_4b_grpo_colab.ipynb` on the final HF compute setup.
 - [ ] Curate 2-3 before/after trajectories from the exported proof pack.
 - [ ] Record a sub-2-minute video or HF mini-blog.
 - [ ] In the README/HF Space, lead with SENTINEL, not only IRT.

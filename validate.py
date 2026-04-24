@@ -2,10 +2,11 @@
 
 Validates all requirements:
   - openenv.yaml exists and is valid
-  - All 3 tasks are defined
+  - All 7 tasks are defined
   - reset() / step() / state() work correctly
   - Graders produce scores in [0.0, 1.0]
   - Baseline is reproducible
+  - Native OpenEnv adapter reset/step/state works when dependencies are installed
   - Typed models validate
 """
 
@@ -37,7 +38,7 @@ def validate() -> bool:
         import yaml
         with open("openenv.yaml") as f:
             data = yaml.safe_load(f)
-        assert data["name"] == "incident-response-triage"
+        assert data["name"] == "sentinel-oversight-command"
         assert len(data["tasks"]) >= 3
         return f"Found {len(data['tasks'])} tasks"
 
@@ -58,7 +59,7 @@ def validate() -> bool:
             assert t.difficulty in ("easy", "medium", "hard", "expert")
         return f"{len(tasks)} tasks defined"
     ok, msg = _check("Tasks", check_tasks)
-    checks.append(("3+ tasks defined", ok, msg))
+    checks.append(("7 tasks defined", ok, msg))
 
     # 3. reset() for all tasks
     def check_reset():
@@ -138,6 +139,36 @@ def validate() -> bool:
     ok, msg = _check("SENTINEL", check_sentinel)
     checks.append(("SENTINEL environment", ok, msg))
 
+    # 9. Native OpenEnv adapter (skips only when local OpenEnv deps are absent)
+    def check_native_openenv():
+        try:
+            import dotenv  # noqa: F401
+            import openenv  # noqa: F401
+        except ImportError as exc:
+            return f"Skipped locally: missing OpenEnv dependency ({exc})"
+
+        from server.openenv_native import SentinelNativeAction, SentinelNativeEnvironment
+
+        native_env = SentinelNativeEnvironment()
+        obs = native_env.reset(task_id="basic_oversight", seed=1)
+        assert obs.task_id == "basic_oversight"
+        assert obs.proposed_action, "Native reset did not expose a proposal"
+        result = native_env.step(
+            SentinelNativeAction(
+                action="APPROVE",
+                explanation="Validation smoke test; policy correctness is checked separately.",
+            )
+        )
+        assert isinstance(result.reward, float)
+        state = native_env.state
+        assert state.task_id == "basic_oversight"
+        assert state.step_count == 1
+        assert isinstance(state.latest_proposal, dict)
+        return "Native OpenEnv reset/step/state smoke passed"
+
+    ok, msg = _check("Native OpenEnv", check_native_openenv)
+    checks.append(("Native OpenEnv adapter", ok, msg))
+
     # Print results
     print("\n" + "=" * 60)
     print("OpenEnv Pre-Submission Validation")
@@ -154,7 +185,7 @@ def validate() -> bool:
     if all_pass:
         print("ALL CHECKS PASSED")
     else:
-        print("SOME CHECKS FAILED — fix before submitting")
+        print("SOME CHECKS FAILED - fix before submitting")
     print("=" * 60)
 
     return all_pass

@@ -389,6 +389,12 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.title = "SENTINEL Oversight Command - OpenEnv"
+app.description = (
+    "An OpenEnv environment for multi-agent AI oversight. SENTINEL supervises "
+    "worker agents during production incident response and decides which "
+    "proposed actions should execute."
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -396,6 +402,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Native OpenEnv adapter mount
+# ---------------------------------------------------------------------------
+# The custom endpoints above expose the full hackathon demo surface. This mount
+# also gives latest OpenEnv clients the standard schema/reset/step/state/ws API
+# backed by OpenEnv's Environment base class.
+NATIVE_OPENENV_AVAILABLE = False
+try:  # pragma: no cover - availability depends on the local OpenEnv install
+    from openenv.core.env_server.http_server import create_app as create_openenv_app
+
+    from server.openenv_native import (
+        SentinelNativeAction,
+        SentinelNativeEnvironment,
+        SentinelNativeObservation,
+    )
+
+    app.mount(
+        "/openenv",
+        create_openenv_app(
+            SentinelNativeEnvironment,
+            SentinelNativeAction,
+            SentinelNativeObservation,
+            env_name="sentinel_oversight_command",
+            max_concurrent_envs=32,
+        ),
+    )
+    NATIVE_OPENENV_AVAILABLE = True
+    _log.info("native OpenEnv adapter mounted at /openenv")
+except Exception as exc:  # pragma: no cover
+    _log.warning("native OpenEnv adapter unavailable: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -428,9 +466,12 @@ async def health():
     """Health check – returns 200 with environment info and live telemetry."""
     return {
         "status": "ok",
-        "environment": "incident-response-triage",
+        "environment": "sentinel-oversight-command",
         "version": "1.0.0",
         "tasks": [t.task_id for t in get_all_tasks()],
+        "primary_theme": "multi-agent interactions",
+        "native_openenv_available": NATIVE_OPENENV_AVAILABLE,
+        "native_openenv_mount": "/openenv" if NATIVE_OPENENV_AVAILABLE else None,
         "active_sessions": len(_SESSION_REGISTRY),
         "ws_active_connections": _WS_ACTIVE_CONNECTIONS,
         "telemetry": _TELEMETRY,

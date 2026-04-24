@@ -1,5 +1,5 @@
 ---
-title: Incident Response Triage
+title: SENTINEL Oversight Command
 emoji: 🚨
 colorFrom: red
 colorTo: yellow
@@ -8,20 +8,24 @@ pinned: false
 tags:
   - openenv
   - reinforcement-learning
+  - sentinel
+  - multi-agent
+  - oversight
+  - ai-safety
   - sre
   - incident-response
 ---
 
-# Incident Response Triage + SENTINEL Oversight - OpenEnv Environment
+# SENTINEL Oversight Command - OpenEnv Environment
 
-> **Grand Finale upgrade:** this repo now includes **SENTINEL**, a multi-agent AI oversight environment for the Meta PyTorch OpenEnv Hackathon finale. SENTINEL trains an AI commander to supervise worker agents before their proposed actions execute, gives blocked workers one corrective revision pass, and tracks per-worker rehabilitation in the audit trail. See [`docs/README.md`](docs/README.md), [`docs/sentinel/README.md`](docs/sentinel/README.md), and [`docs/sentinel/submission-readiness.md`](docs/sentinel/submission-readiness.md).
+> **Hackathon focus:** SENTINEL is a multi-agent AI oversight environment for the Meta PyTorch OpenEnv Hackathon finale. It trains an AI commander to supervise worker agents before their proposed actions execute, gives blocked workers one corrective revision pass, and tracks per-worker rehabilitation in the audit trail. See [`docs/README.md`](docs/README.md), [`docs/sentinel/README.md`](docs/sentinel/README.md), and [`docs/sentinel/submission-readiness.md`](docs/sentinel/submission-readiness.md).
 
-> **Live Space:** https://srikrishna2005-openenv.hf.space  
-> **Domain:** Site Reliability Engineering / On-Call Incident Management  
-> **Difficulty:** Easy → Medium → Hard  
-> **Framework:** FastAPI + Pydantic v2  
-> **Phase 1 & 2:** ✅ PASSED  
-> **Tags:** `openenv` `incident-response` `site-reliability` `operations` `triage`
+> **Live Space:** https://srikrishna2005-openenv.hf.space
+> **Domain:** Multi-agent oversight for Site Reliability Engineering / On-Call Incident Management
+> **Difficulty:** Easy → Medium → Hard → Expert
+> **Framework:** FastAPI + Pydantic v2 + OpenEnv native adapter at `/openenv`
+> **Phase 1 & 2:** ✅ PASSED
+> **Tags:** `openenv` `sentinel` `multi-agent` `oversight` `ai-safety` `incident-response`
 
 <table>
 <tr>
@@ -31,16 +35,16 @@ tags:
 <td><strong>Tasks</strong></td><td>7 total: 3 IRT + 4 SENTINEL oversight tasks</td>
 </tr>
 <tr>
-<td><strong>Scenarios</strong></td><td>7 variants across 3 difficulty levels</td>
+<td><strong>Scenarios</strong></td><td>7 IRT variants plus SENTINEL oversight schedules</td>
 </tr>
 <tr>
 <td><strong>Reward Components</strong></td><td>12 (dense, per-step)</td>
 </tr>
 <tr>
-<td><strong>Unit Tests</strong></td><td>198 / 198 passing</td>
+<td><strong>Unit Tests</strong></td><td>229 / 229 passing</td>
 </tr>
 <tr>
-<td><strong>Validation Checks</strong></td><td>7 / 7 passing</td>
+<td><strong>Validation Checks</strong></td><td>9 / 9 passing</td>
 </tr>
 <tr>
 <td><strong>CI</strong></td><td>GitHub Actions — tests + Docker build + lint</td>
@@ -53,6 +57,18 @@ tags:
 
 ### Functional Requirements
 
+Latest hackathon additions:
+
+- Native OpenEnv adapter: `server/openenv_native.py` wraps SENTINEL with OpenEnv's `Environment` base class and mounts at `/openenv` when OpenEnv dependencies are installed.
+- Training pipeline: `train.py` supports HF TRL GRPO, Qwen3-4B QLoRA, optional Unsloth, adaptive curriculum, KL guardrails, and proof-pack metrics.
+- Colab runner: [`notebooks/sentinel_qwen3_4b_grpo_colab.ipynb`](notebooks/sentinel_qwen3_4b_grpo_colab.ipynb) gives judges a rerunnable HF TRL/Unsloth training path.
+- Judge plot pack: `scripts/render_training_dashboard.py` exports 18 dashboard images covering reward, detection, scenario coverage, tripwires, Top-1 vs Best-of-K, KL drift, memory growth, and zero-gradient GRPO groups.
+- Memory proof: `scripts/run_memory_ablation.py` compares memory-off vs memory-on short runs so we can show that SENTINEL learns from its own oversight mistakes.
+- Training monitor upgrade: structured mistake cards, scenario coverage, and uninformative-batch detection are now logged in `outputs/monitoring/`.
+- Counterfactual twin proof: monitoring and held-out eval now expose damage without SENTINEL vs damage with SENTINEL, using the existing counterfactual ledger.
+- Supervisor-as-coach reward: worker-facing corrective guidance is now scored separately through `coaching_quality`, not only by whether the worker revision happened to succeed.
+- Remaining submission blocker: `outputs/monitoring/` and `outputs/reward_curves/` must be filled by the real onsite HF compute run before final submission.
+
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
 | **Real-world task simulation** | ✅ | On-call SRE incident response — a real workflow performed by thousands of engineers daily. Not a game or toy. |
@@ -60,9 +76,9 @@ tags:
 | **`step(action)` → observation, reward, done, info** | ✅ | `src/environment.py::IncidentResponseEnv.step()` |
 | **`reset()` → initial observation** | ✅ | `src/environment.py::IncidentResponseEnv.reset()` |
 | **`state()` → current state** | ✅ | `src/environment.py::IncidentResponseEnv.state()` |
-| **`openenv.yaml` with metadata** | ✅ | Root-level `openenv.yaml` — 3 tasks, full action/obs/reward spec |
-| **Tested via `openenv validate`** | ✅ | 7/7 checks pass — see [Validation Output](#validation-output) |
-| **Minimum 3 tasks with graders (0–1, easy→medium→hard)** | ✅ | `severity_classification` (easy), `root_cause_analysis` (medium), `full_incident_management` (hard) |
+| **`openenv.yaml` with metadata** | ✅ | Root-level `openenv.yaml` — 7 tasks, full action/obs/reward spec |
+| **Tested via `openenv validate`** | ✅ | 9/9 checks pass — see [Validation Output](#validation-output) |
+| **Minimum 3 tasks with graders (0–1, easy→medium→hard)** | ✅ | 7 tasks total: 3 IRT tasks plus 4 SENTINEL oversight tasks through expert difficulty |
 | **Graders: deterministic success/failure criteria** | ✅ | `src/graders.py` — multi-dimensional, keyword-matched, no randomness in grading |
 | **Meaningful reward: dense, partial progress, penalizes bad behavior** | ✅ | 12 components, per-step rewards, `−0.005` to `−0.015/step` temporal degradation, `−0.08` wrong remediation |
 | **Baseline inference script using OpenAI API** | ✅ | `inference.py` — uses `openai.OpenAI` client; rules mode for default, LLM mode via env vars |
@@ -86,7 +102,14 @@ tags:
 
 ## What Is This?
 
-A **production incident response simulator** where an AI agent acts as an on-call engineer. The agent receives alerts from a monitoring system and must:
+**SENTINEL Oversight Command** is a multi-agent OpenEnv environment where an LLM
+acts as an incident commander supervising other AI workers before their actions
+can execute. The underlying world is a production incident-response simulator,
+but the trained policy is not merely doing SRE work; it is learning oversight:
+approve safe worker actions, block unsafe shortcuts, redirect flawed proposals,
+reassign risky workers, and flag suspicious patterns.
+
+The worker fleet operates inside an on-call incident world. Workers propose actions such as:
 
 1. **Investigate** — query service logs and metrics (progressive disclosure)
 2. **Classify** — assign incident severity (P1–P4)
@@ -113,21 +136,21 @@ This models a task that tens of thousands of engineers perform daily, with real 
 ## Tasks
 
 ### Task 1: Severity Classification (Easy)
-**Scenario:** Database connection pool exhaustion on PostgreSQL primary.  
-**Objective:** Review 3 alerts, investigate 2 services, classify as correct severity.  
-**Max steps:** 10  
+**Scenario:** Database connection pool exhaustion on PostgreSQL primary.
+**Objective:** Review 3 alerts, investigate 2 services, classify as correct severity.
+**Max steps:** 10
 **Graded on:** Classification accuracy (50%), investigation quality (25%), efficiency (25%).
 
-### Task 2: Root Cause Analysis (Medium)  
-**Scenario:** Payment processing failures caused by Redis session eviction.  
-**Objective:** Distinguish root cause (Redis memory) from symptoms (payment gateway errors), classify severity, diagnose, and remediate.  
-**Max steps:** 15  
+### Task 2: Root Cause Analysis (Medium)
+**Scenario:** Payment processing failures caused by Redis session eviction.
+**Objective:** Distinguish root cause (Redis memory) from symptoms (payment gateway errors), classify severity, diagnose, and remediate.
+**Max steps:** 15
 **Graded on:** Severity (15%), root cause investigation (15%), diagnosis (30%), remediation (20%), efficiency (20%).
 
 ### Task 3: Full Incident Management (Hard)
-**Scenario:** Cascading multi-service outage from a bad deployment (auth-service v3.1.0 memory leak).  
-**Objective:** 6 alerts across 8 services. Must investigate strategically, classify, diagnose, apply multiple remediations, escalate to correct teams, and communicate status.  
-**Max steps:** 20  
+**Scenario:** Cascading multi-service outage from a bad deployment (auth-service v3.1.0 memory leak).
+**Objective:** 6 alerts across 8 services. Must investigate strategically, classify, diagnose, apply multiple remediations, escalate to correct teams, and communicate status.
+**Max steps:** 20
 **Graded on:** Severity (12%), diagnosis (18%), remediations (18%), escalation (14%), communication (13%), investigation thoroughness (12%), efficiency (13%).
 
 ---
@@ -246,8 +269,8 @@ python validate.py
 ### Docker
 
 ```bash
-docker build -t incident-response-triage .
-docker run -p 7860:7860 incident-response-triage
+docker build -t sentinel-oversight-command .
+docker run -p 7860:7860 sentinel-oversight-command
 ```
 
 ### Hugging Face Spaces
@@ -264,7 +287,7 @@ The container exposes port **7860** as required by HF Spaces.
 
 ```bash
 # Test the deployed space
-curl https://<your-username>-incident-response-triage.hf.space/
+curl https://srikrishna2005-openenv.hf.space/
 ```
 
 ---
@@ -291,6 +314,8 @@ curl https://<your-username>-incident-response-triage.hf.space/
 | `GET` | `/sentinel/dashboard` | — | Interactive SENTINEL fleet oversight dashboard |
 | `POST` | `/sentinel/intercept` | — | Score an arbitrary worker proposal before execution |
 | `GET` | `/sentinel/stream` | `session_id` query | Server-sent events for live SENTINEL state |
+
+Native OpenEnv adapter endpoints are also available under `/openenv`: `/openenv/schema`, `/openenv/metadata`, `/openenv/reset`, `/openenv/step`, `/openenv/state`, and `/openenv/ws`.
 
 > **Session flow:** `/reset` returns a `session_id`. Pass it as the `X-Session-ID` HTTP header on all subsequent `/step`, `/state`, `/grader`, and `/render` calls. This enables safe concurrent multi-agent evaluation.
 
@@ -402,13 +427,15 @@ Running `python validate.py`:
 ============================================================
 OpenEnv Pre-Submission Validation
 ============================================================
-  [PASS] openenv.yaml valid: Found 3 tasks
-  [PASS] 3+ tasks defined: 3 tasks defined
+  [PASS] openenv.yaml valid: Found 7 tasks
+  [PASS] 7 tasks defined: 7 tasks defined
   [PASS] reset() works: All tasks reset successfully
   [PASS] step() returns StepResult: Step returns correct StepResult
   [PASS] state() works: State snapshot correct
   [PASS] Graders score [0.0-1.0]: All graders in [0.0, 1.0]
   [PASS] Baseline reproducible: Baseline scores: ['0.9900', '0.9900', '0.9300']
+  [PASS] SENTINEL environment: SENTINEL: 4 tasks validated
+  [PASS] Native OpenEnv adapter: Native OpenEnv reset/step/state smoke passed
 ============================================================
 ALL CHECKS PASSED
 ============================================================
@@ -732,10 +759,10 @@ Several design choices directly prevent the agent from exploiting the reward fun
 ## Pre-Submission Checklist
 
 - [x] HF Space deploys and responds to `GET /` with 200
-- [x] `openenv.yaml` valid with 3 tasks, action/observation spaces, reward spec
+- [x] `openenv.yaml` valid with 7 tasks, action/observation spaces, reward spec
 - [x] Typed Pydantic v2 models for Observation, Action, Reward, StepResult
 - [x] `step()` / `reset()` / `state()` endpoints functional
-- [x] 3 tasks with difficulty progression: easy → medium → hard
+- [x] 7 tasks with difficulty progression: easy → medium → hard → expert
 - [x] Graders produce deterministic scores in [0.0, 1.0] range
 - [x] Dense per-step rewards (not just binary end-of-episode)
 - [x] Baseline inference script (`inference.py`) with reproducible scores

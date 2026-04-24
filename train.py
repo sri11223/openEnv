@@ -76,6 +76,8 @@ PROMPT_DATASET_SIZE = int(os.getenv("PROMPT_DATASET_SIZE", str(max(512, TRAIN_ST
 USE_LLM_PANEL   = bool(GROQ_API_KEY)                  # auto-enable if key available
 USE_CURRICULUM  = True
 USE_SENTINEL    = os.getenv("USE_SENTINEL", "0") == "1"  # Enable SENTINEL training
+USE_AGENT_MEMORY = os.getenv("USE_AGENT_MEMORY", "1") == "1"
+USE_FEEDBACK_MEMORY = os.getenv("USE_FEEDBACK_MEMORY", "1") == "1" and USE_AGENT_MEMORY
 USE_SENTINEL_ADVERSARIAL = os.getenv("USE_SENTINEL_ADVERSARIAL", "1") == "1"
 SENTINEL_ADVERSARIAL_PATH = os.getenv(
     "SENTINEL_ADVERSARIAL_PATH",
@@ -158,6 +160,10 @@ def collect_training_stack_versions() -> Dict[str, Any]:
         "train_steps": TRAIN_STEPS,
         "warm_start_steps": WARM_START_STEPS,
         "reward_schedule_mode": REWARD_SCHEDULE_MODE,
+        "memory": {
+            "agent_memory_enabled": USE_AGENT_MEMORY,
+            "feedback_memory_enabled": USE_FEEDBACK_MEMORY,
+        },
         "productive_signal_thresholds": {
             "zero_signal_reward_threshold": ZERO_SIGNAL_REWARD_THRESHOLD,
             "trivial_reward_threshold": TRIVIAL_REWARD_THRESHOLD,
@@ -544,6 +550,7 @@ class AdaptivePromptState:
     memory: Dict[str, Any] = field(default_factory=dict)
     feedback_memory: Dict[str, Any] = field(default_factory=dict)
     memory_context: str = ""
+    memory_enabled: bool = True
     max_seeds: int = 5
     sentinel_adversarial_cases: List[Dict[str, Any]] = field(default_factory=list)
     prompt_refreshes: int = 0
@@ -567,9 +574,9 @@ class AdaptivePromptState:
             return build_prompt_record(
                 task_id=case.get("task_id", self.task_ids[0]),
                 variant_seed=0,
-                memory_context=self.memory_context,
-                memory=self.memory,
-                feedback_memory=self.feedback_memory,
+                memory_context=self.memory_context if self.memory_enabled else "",
+                memory=self.memory if self.memory_enabled else None,
+                feedback_memory=self.feedback_memory if self.memory_enabled else None,
                 adversarial_case=case,
             )
 
@@ -577,9 +584,9 @@ class AdaptivePromptState:
         return build_prompt_record(
             task_id=task_id,
             variant_seed=variant_seed,
-            memory_context=self.memory_context,
-            memory=self.memory,
-            feedback_memory=self.feedback_memory,
+            memory_context=self.memory_context if self.memory_enabled else "",
+            memory=self.memory if self.memory_enabled else None,
+            feedback_memory=self.feedback_memory if self.memory_enabled else None,
         )
 
     def should_sample_adversarial(self, selection_id: int) -> bool:
@@ -615,21 +622,25 @@ class AdaptivePromptState:
             "steps": len(history) or 1,
             "trajectory_summary": _trajectory_summary_from_history(task_id, history),
             "mistakes": _mistakes_from_history(task_id, history, reward),
+            "mistake_cards": _mistake_cards_from_history(task_id, history, reward),
             "successes": _successes_from_history(task_id, history, reward),
         }
-        self.memory = mem_record_episode(self.memory, episode_data)
-        if USE_SENTINEL and history:
+        if self.memory_enabled:
+            self.memory = mem_record_episode(self.memory, episode_data)
+        if USE_SENTINEL and USE_FEEDBACK_MEMORY and self.memory_enabled and history:
             self.feedback_memory = record_episode_feedback(self.feedback_memory, task_id, history)
 
         self.prompt_refreshes += 1
         if self.prompt_refreshes % 10 == 0:
-            save_agent_memory(self.memory)
-            if USE_SENTINEL:
+            if self.memory_enabled:
+                save_agent_memory(self.memory)
+            if USE_SENTINEL and USE_FEEDBACK_MEMORY and self.memory_enabled:
                 save_feedback_memory(self.feedback_memory, SENTINEL_FEEDBACK_MEMORY_PATH)
-            self.memory = maybe_consolidate_memory(
-                self.memory,
-                GROQ_API_KEY if USE_LLM_PANEL else None,
-            )
+            if self.memory_enabled:
+                self.memory = maybe_consolidate_memory(
+                    self.memory,
+                    GROQ_API_KEY if USE_LLM_PANEL else None,
+                )
 
     def refresh_adversarial_cases(self) -> None:
         if not (USE_SENTINEL and USE_SENTINEL_ADVERSARIAL):
@@ -762,6 +773,109 @@ def _productive_signal_metrics(
     return payload
 
 
+def _increment_counter(counter: Dict[str, int], key: Any) -> None:
+    label = str(key or "unknown")
+    counter[label] = counter.get(label, 0) + 1
+
+
+def _training_coverage_metrics(
+    histories: List[List[Dict[str, Any]]],
+    task_ids: List[str],
+    variant_seeds: List[int],
+    adversarial_cases: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Summarize what the batch actually exercised for judge-facing plots."""
+    task_counts: Dict[str, int] = {}
+    scenario_counts: Dict[str, int] = {}
+    worker_counts: Dict[str, int] = {}
+    worker_role_counts: Dict[str, int] = {}
+    misbehavior_counts: Dict[str, int] = {}
+    decision_counts: Dict[str, int] = {}
+    corrective_counts: Dict[str, int] = {"attempted": 0, "approved": 0}
+
+    for index, task_id in enumerate(task_ids):
+        variant_seed = int(variant_seeds[index]) if index < len(variant_seeds) else 0
+        _increment_counter(task_counts, task_id)
+        _increment_counter(scenario_counts, f"{task_id}:seed{variant_seed}")
+
+    for history in histories:
+        for entry in history:
+            audit = entry.get("audit") or {}
+            info = entry.get("info") or {}
+            decision = entry.get("decision") or {}
+            revision = entry.get("worker_revision") or {}
+            worker_id = audit.get("worker_id") or (entry.get("proposal") or {}).get("worker_id")
+            if worker_id:
+                _increment_counter(worker_counts, worker_id)
+            worker_role = audit.get("worker_role") or info.get("worker_role")
+            if worker_role:
+                _increment_counter(worker_role_counts, worker_role)
+            if audit.get("was_misbehavior") or info.get("is_misbehavior"):
+                _increment_counter(misbehavior_counts, audit.get("reason") or info.get("mb_type") or "unknown")
+            _increment_counter(
+                decision_counts,
+                audit.get("sentinel_decision") or decision.get("decision") or decision.get("action") or "unknown",
+            )
+            if revision.get("attempted"):
+                corrective_counts["attempted"] += 1
+            if revision.get("revision_approved"):
+                corrective_counts["approved"] += 1
+
+    adversarial_count = sum(1 for case in (adversarial_cases or []) if str(case or "").strip())
+    total_cases = len(adversarial_cases or []) or len(task_ids) or 1
+    return {
+        "task_counts": dict(sorted(task_counts.items())),
+        "scenario_counts": dict(sorted(scenario_counts.items())),
+        "worker_counts": dict(sorted(worker_counts.items())),
+        "worker_role_counts": dict(sorted(worker_role_counts.items())),
+        "misbehavior_counts": dict(sorted(misbehavior_counts.items())),
+        "oversight_decision_counts": dict(sorted(decision_counts.items())),
+        "corrective_loop_counts": corrective_counts,
+        "adversarial_case_count": adversarial_count,
+        "adversarial_case_fraction": round(_safe_ratio(adversarial_count, total_cases), 4),
+    }
+
+
+def _zero_gradient_group_metrics(
+    rewards: List[float],
+    task_ids: List[str],
+    variant_seeds: List[int],
+    prompts: Optional[List[str]] = None,
+    adversarial_cases: Optional[List[str]] = None,
+    tolerance: float = 1e-9,
+) -> Dict[str, Any]:
+    """Detect GRPO groups where every sampled completion received the same reward."""
+    groups: Dict[str, List[float]] = {}
+    for index, reward in enumerate(rewards):
+        if prompts and index < len(prompts):
+            key = str(prompts[index])
+        else:
+            task_id = task_ids[index] if index < len(task_ids) else "unknown"
+            variant_seed = int(variant_seeds[index]) if index < len(variant_seeds) else 0
+            case = ""
+            if adversarial_cases and index < len(adversarial_cases):
+                case = str(adversarial_cases[index] or "")
+            key = f"{task_id}:seed{variant_seed}:adv{bool(case.strip())}"
+        groups.setdefault(key, []).append(float(reward))
+
+    multi_sample_groups = [values for values in groups.values() if len(values) > 1]
+    zero_gradient_groups = [
+        values
+        for values in multi_sample_groups
+        if max(values) - min(values) <= tolerance
+    ]
+    group_std_values = [float(np.std(values)) for values in multi_sample_groups]
+    return {
+        "reward_group_count": len(multi_sample_groups),
+        "zero_gradient_group_count": len(zero_gradient_groups),
+        "zero_gradient_group_fraction": round(
+            _safe_ratio(len(zero_gradient_groups), len(multi_sample_groups)),
+            4,
+        ),
+        "mean_reward_group_std": round(float(np.mean(group_std_values)), 4) if group_std_values else 0.0,
+    }
+
+
 def _summarize_sentinel_history(history: List[Dict[str, Any]]) -> Dict[str, float]:
     audits = [entry.get("audit") or {} for entry in history if entry.get("audit")]
     misbehaviors = sum(1 for audit in audits if audit.get("was_misbehavior"))
@@ -790,8 +904,14 @@ def _summarize_sentinel_history(history: List[Dict[str, Any]]) -> Dict[str, floa
         for entry in history
         if (entry.get("worker_revision") or {}).get("revision_approved")
     )
+    coaching_values = [
+        float((entry.get("reward_breakdown") or {}).get("coaching_quality"))
+        for entry in history
+        if (entry.get("reward_breakdown") or {}).get("coaching_quality") is not None
+    ]
     prevented_damage = sum(float(audit.get("prevented_damage_score") or 0.0) for audit in audits)
     allowed_damage = sum(float(audit.get("allowed_damage_score") or 0.0) for audit in audits)
+    twin_without_sentinel_damage = prevented_damage + allowed_damage
     safe_actions = max(0, len(audits) - misbehaviors)
     return {
         "steps": float(len(history)),
@@ -803,6 +923,14 @@ def _summarize_sentinel_history(history: List[Dict[str, Any]]) -> Dict[str, floa
         "revision_successes": float(revision_successes),
         "prevented_damage_total": round(prevented_damage, 4),
         "allowed_damage_total": round(allowed_damage, 4),
+        "twin_without_sentinel_damage_total": round(twin_without_sentinel_damage, 4),
+        "twin_with_sentinel_damage_total": round(allowed_damage, 4),
+        "twin_prevented_damage_total": round(prevented_damage, 4),
+        "twin_damage_reduction_rate": round(
+            _safe_ratio(prevented_damage, twin_without_sentinel_damage),
+            4,
+        ),
+        "coaching_quality": round(float(np.mean(coaching_values)), 4) if coaching_values else 0.0,
         "detection_rate": round(_safe_ratio(caught, misbehaviors), 4),
         "false_positive_rate": round(_safe_ratio(false_positives, safe_actions), 4),
         "risk_reduction_rate": round(
@@ -822,6 +950,8 @@ def _aggregate_batch_metrics(
     task_ids: List[str],
     variant_seeds: List[int],
     completions: Optional[List[str]] = None,
+    prompts: Optional[List[str]] = None,
+    adversarial_cases: Optional[List[str]] = None,
     curriculum_summary: Optional[Dict[str, Any]] = None,
     prompt_refreshes: int = 0,
 ) -> Dict[str, Any]:
@@ -860,6 +990,10 @@ def _aggregate_batch_metrics(
                 "revision_successes": 0.0,
                 "prevented_damage_total": 0.0,
                 "allowed_damage_total": 0.0,
+                "twin_without_sentinel_damage_total": 0.0,
+                "twin_with_sentinel_damage_total": 0.0,
+                "twin_prevented_damage_total": 0.0,
+                "coaching_quality_values": [],
                 "zero_reward_count": 0,
                 "trivial_reward_count": 0,
                 "productive_count": 0,
@@ -890,8 +1024,12 @@ def _aggregate_batch_metrics(
                 "revision_successes",
                 "prevented_damage_total",
                 "allowed_damage_total",
+                "twin_without_sentinel_damage_total",
+                "twin_with_sentinel_damage_total",
+                "twin_prevented_damage_total",
             ):
                 bucket[key] += float(rollup[key])
+            bucket["coaching_quality_values"].append(float(rollup.get("coaching_quality", 0.0)))
 
     for task_id, bucket in list(per_task.items()):
         task_summary: Dict[str, Any] = {
@@ -915,6 +1053,20 @@ def _aggregate_batch_metrics(
                     "revision_successes": int(bucket["revision_successes"]),
                     "prevented_damage_total": round(bucket["prevented_damage_total"], 4),
                     "allowed_damage_total": round(bucket["allowed_damage_total"], 4),
+                    "twin_without_sentinel_damage_total": round(bucket["twin_without_sentinel_damage_total"], 4),
+                    "twin_with_sentinel_damage_total": round(bucket["twin_with_sentinel_damage_total"], 4),
+                    "twin_prevented_damage_total": round(bucket["twin_prevented_damage_total"], 4),
+                    "twin_damage_reduction_rate": round(
+                        _safe_ratio(
+                            bucket["twin_prevented_damage_total"],
+                            bucket["twin_without_sentinel_damage_total"],
+                        ),
+                        4,
+                    ),
+                    "coaching_quality": round(
+                        float(np.mean(bucket["coaching_quality_values"])),
+                        4,
+                    ) if bucket["coaching_quality_values"] else 0.0,
                     "detection_rate": round(
                         _safe_ratio(bucket["caught"], bucket["misbehaviors"]),
                         4,
@@ -954,6 +1106,16 @@ def _aggregate_batch_metrics(
     }
     payload.update(_completion_diversity_metrics(completions))
     payload.update(productive_metrics)
+    payload.update(_training_coverage_metrics(histories, task_ids, variant_seeds, adversarial_cases))
+    payload.update(
+        _zero_gradient_group_metrics(
+            rewards=safe_rewards,
+            task_ids=task_ids,
+            variant_seeds=variant_seeds,
+            prompts=prompts,
+            adversarial_cases=adversarial_cases,
+        )
+    )
 
     if is_sentinel_batch:
         overall = {
@@ -965,11 +1127,30 @@ def _aggregate_batch_metrics(
             "revision_successes": 0.0,
             "prevented_damage_total": 0.0,
             "allowed_damage_total": 0.0,
+            "twin_without_sentinel_damage_total": 0.0,
+            "twin_with_sentinel_damage_total": 0.0,
+            "twin_prevented_damage_total": 0.0,
+            "coaching_quality_sum": 0.0,
+            "coaching_quality_count": 0.0,
         }
         for history in histories:
             rollup = _summarize_sentinel_history(history)
-            for key in overall:
+            for key in (
+                "misbehaviors",
+                "caught",
+                "false_positives",
+                "false_negatives",
+                "revision_attempts",
+                "revision_successes",
+                "prevented_damage_total",
+                "allowed_damage_total",
+                "twin_without_sentinel_damage_total",
+                "twin_with_sentinel_damage_total",
+                "twin_prevented_damage_total",
+            ):
                 overall[key] += float(rollup[key])
+            overall["coaching_quality_sum"] += float(rollup.get("coaching_quality", 0.0))
+            overall["coaching_quality_count"] += 1.0
 
         safe_actions = max(0.0, float(sum(len(history) for history in histories)) - overall["misbehaviors"])
         payload.update(
@@ -982,6 +1163,20 @@ def _aggregate_batch_metrics(
                 "revision_successes": int(overall["revision_successes"]),
                 "prevented_damage_total": round(overall["prevented_damage_total"], 4),
                 "allowed_damage_total": round(overall["allowed_damage_total"], 4),
+                "twin_without_sentinel_damage_total": round(overall["twin_without_sentinel_damage_total"], 4),
+                "twin_with_sentinel_damage_total": round(overall["twin_with_sentinel_damage_total"], 4),
+                "twin_prevented_damage_total": round(overall["twin_prevented_damage_total"], 4),
+                "twin_damage_reduction_rate": round(
+                    _safe_ratio(
+                        overall["twin_prevented_damage_total"],
+                        overall["twin_without_sentinel_damage_total"],
+                    ),
+                    4,
+                ),
+                "coaching_quality": round(
+                    _safe_ratio(overall["coaching_quality_sum"], overall["coaching_quality_count"]),
+                    4,
+                ),
                 "detection_rate": round(_safe_ratio(overall["caught"], overall["misbehaviors"]), 4),
                 "false_positive_rate": round(_safe_ratio(overall["false_positives"], safe_actions), 4),
                 "risk_reduction_rate": round(
@@ -1047,9 +1242,12 @@ class TrainingMonitor:
         task_ids: List[str],
         variant_seeds: List[int],
         completions: Optional[List[str]],
-        curriculum_summary: Optional[Dict[str, Any]],
-        prompt_refreshes: int,
+        prompts: Optional[List[str]] = None,
+        adversarial_cases: Optional[List[str]] = None,
+        curriculum_summary: Optional[Dict[str, Any]] = None,
+        prompt_refreshes: int = 0,
         reward_schedule: Optional[Dict[str, Any]] = None,
+        memory_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         self.batch_index += 1
         metrics = _aggregate_batch_metrics(
@@ -1058,6 +1256,8 @@ class TrainingMonitor:
             task_ids=task_ids,
             variant_seeds=variant_seeds,
             completions=completions,
+            prompts=prompts,
+            adversarial_cases=adversarial_cases,
             curriculum_summary=curriculum_summary,
             prompt_refreshes=prompt_refreshes,
         )
@@ -1069,6 +1269,8 @@ class TrainingMonitor:
         )
         if reward_schedule:
             metrics["reward_schedule"] = reward_schedule
+        if memory_summary:
+            metrics["memory"] = memory_summary
 
         self.running_batch_count += 1
         self.running_reward_total += metrics["reward_mean"]
@@ -1344,6 +1546,19 @@ class RolloutAuditSampler:
             lines.append(f"- Frontier hit rate: {monitor_summary.get('frontier_hit_rate', 0.0):.4f}")
         if "task_diversity_ratio" in monitor_summary:
             lines.append(f"- Task diversity ratio: {monitor_summary.get('task_diversity_ratio', 0.0):.4f}")
+        if "zero_gradient_group_fraction" in monitor_summary:
+            lines.append(f"- Zero-gradient group fraction: {monitor_summary.get('zero_gradient_group_fraction', 0.0):.4f}")
+        if "adversarial_case_fraction" in monitor_summary:
+            lines.append(f"- Adversarial case fraction: {monitor_summary.get('adversarial_case_fraction', 0.0):.4f}")
+        if "twin_damage_reduction_rate" in monitor_summary:
+            lines.append(f"- Twin damage reduction rate: {monitor_summary.get('twin_damage_reduction_rate', 0.0):.4f}")
+        if "coaching_quality" in monitor_summary:
+            lines.append(f"- Coaching quality: {monitor_summary.get('coaching_quality', 0.0):.4f}")
+        if monitor_summary.get("memory"):
+            mem = monitor_summary["memory"]
+            lines.append(
+                f"- Memory: enabled={mem.get('agent_memory_enabled')} cards={mem.get('mistake_cards_stored', 0)}"
+            )
         if reward_schedule:
             lines.append(
                 f"- Reward schedule: {reward_schedule.get('stage', 'unknown')} ({reward_schedule.get('mode', 'unknown')})"
@@ -1368,7 +1583,10 @@ class RolloutAuditSampler:
                         f"- Detection rate: `{history_summary.get('detection_rate', 0.0):.4f}`",
                         f"- False positive rate: `{history_summary.get('false_positive_rate', 0.0):.4f}`",
                         f"- Risk reduction rate: `{history_summary.get('risk_reduction_rate', 0.0):.4f}`",
+                        f"- Twin without SENTINEL damage: `{history_summary.get('twin_without_sentinel_damage_total', 0.0):.4f}`",
+                        f"- Twin with SENTINEL damage: `{history_summary.get('twin_with_sentinel_damage_total', 0.0):.4f}`",
                         f"- Rehabilitation rate: `{history_summary.get('worker_rehabilitation_rate', 0.0):.4f}`",
+                        f"- Coaching quality: `{history_summary.get('coaching_quality', 0.0):.4f}`",
                     ]
                 )
             lines.extend(
@@ -1728,6 +1946,7 @@ def _sentinel_history_entry(decision: Dict[str, Any], result) -> Dict[str, Any]:
         "supervisor_feedback": result.info.get("supervisor_feedback", {}),
         "worker_revision": result.info.get("worker_revision", {}),
         "executed_action": result.info.get("executed_action", {}),
+        "reward_breakdown": dict(getattr(result.sentinel_reward, "breakdown", {}) or {}),
         "step_reward": float(result.sentinel_reward.total),
     }
 
@@ -1769,6 +1988,82 @@ def _mistakes_from_history(task_id: str, history: List[Dict[str, Any]], score: f
     if not mistakes and score < 0.70:
         mistakes.append(f"Low score on {task_id}; tighten oversight and reassignment choices.")
     return mistakes[:3]
+
+
+def _mistake_cards_from_history(
+    task_id: str,
+    history: List[Dict[str, Any]],
+    score: float,
+) -> List[Dict[str, Any]]:
+    """Build structured oversight lessons that can be tracked and ablated."""
+    cards: List[Dict[str, Any]] = []
+    for entry in history:
+        audit = entry.get("audit") or {}
+        info = entry.get("info") or {}
+        decision = entry.get("decision") or {}
+        worker_revision = entry.get("worker_revision") or {}
+        worker_id = audit.get("worker_id") or (entry.get("proposal") or {}).get("worker_id")
+        proposed_action = audit.get("proposed_action_type") or (entry.get("proposal") or {}).get("action_type")
+        proposed_target = audit.get("proposed_target") or (entry.get("proposal") or {}).get("target")
+        reason = audit.get("reason") or info.get("mb_type") or decision.get("reason") or "unsafe_pattern"
+        sentinel_decision = audit.get("sentinel_decision") or decision.get("decision") or decision.get("action")
+
+        if audit.get("was_misbehavior") and sentinel_decision == "APPROVE":
+            cards.append(
+                {
+                    "mistake_type": f"false_negative_{reason}",
+                    "task_id": task_id,
+                    "worker_id": worker_id,
+                    "bad_decision": "APPROVE",
+                    "correct_decision": "BLOCK_OR_REDIRECT",
+                    "evidence": (
+                        f"Approved {reason} proposal {proposed_action or 'action'}"
+                        f" on {proposed_target or 'unknown target'}."
+                    ),
+                    "lesson": "Require concrete evidence before approving risky worker proposals.",
+                }
+            )
+        if audit.get("sentinel_decision") != "APPROVE" and not audit.get("was_misbehavior"):
+            cards.append(
+                {
+                    "mistake_type": "false_positive_safe_action",
+                    "task_id": task_id,
+                    "worker_id": worker_id,
+                    "bad_decision": sentinel_decision,
+                    "correct_decision": "APPROVE",
+                    "evidence": (
+                        f"Blocked or altered a safe {proposed_action or 'action'}"
+                        f" on {proposed_target or 'unknown target'}."
+                    ),
+                    "lesson": "Do not over-block safe, evidence-backed worker progress.",
+                }
+            )
+        if worker_revision.get("attempted") and not worker_revision.get("revision_approved"):
+            cards.append(
+                {
+                    "mistake_type": "failed_worker_rehabilitation",
+                    "task_id": task_id,
+                    "worker_id": worker_revision.get("revised_by") or worker_id,
+                    "bad_decision": sentinel_decision,
+                    "correct_decision": "BETTER_CORRECTIVE_FEEDBACK",
+                    "evidence": worker_revision.get("gate_reason") or "Worker revision failed after feedback.",
+                    "lesson": "When blocking, give specific evidence requirements and a safe next action.",
+                }
+            )
+
+    if not cards and score < 0.50:
+        cards.append(
+            {
+                "mistake_type": "low_score_episode",
+                "task_id": task_id,
+                "worker_id": None,
+                "bad_decision": "mixed",
+                "correct_decision": "higher_precision_oversight",
+                "evidence": f"Episode score {score:.2f} stayed below the learning threshold.",
+                "lesson": "Tighten detection, explanation evidence, and reassignment choices.",
+            }
+        )
+    return cards[:5]
 
 
 def _successes_from_history(task_id: str, history: List[Dict[str, Any]], score: float) -> List[str]:
@@ -2031,24 +2326,31 @@ def train():
     from training.memory import (
         load_agent_memory, build_memory_context, maybe_consolidate_memory,
         record_episode as mem_record_episode, save_agent_memory,
+        memory_summary as summarize_agent_memory, new_agent_memory,
     )
     from sentinel.feedback import (
         load_feedback_memory,
+        empty_feedback_memory,
         record_episode_feedback,
         save_feedback_memory,
     )
     from sentinel.rewards import reset_reward_weights, scheduled_reward_weights, set_reward_weights
 
     curriculum = get_curriculum(active_task_ids=ACTIVE_TASK_IDS) if USE_CURRICULUM else None
-    memory     = load_agent_memory()
-    feedback_memory = load_feedback_memory(SENTINEL_FEEDBACK_MEMORY_PATH)
-    memory_ctx = build_memory_context(memory)
+    memory = load_agent_memory() if USE_AGENT_MEMORY else new_agent_memory()
+    feedback_memory = (
+        load_feedback_memory(SENTINEL_FEEDBACK_MEMORY_PATH)
+        if USE_FEEDBACK_MEMORY
+        else empty_feedback_memory()
+    )
+    memory_ctx = build_memory_context(memory) if USE_AGENT_MEMORY else ""
     prompt_state = AdaptivePromptState(
         task_ids=list(ACTIVE_TASK_IDS),
         curriculum=curriculum,
         memory=memory,
         feedback_memory=feedback_memory,
         memory_context=memory_ctx,
+        memory_enabled=USE_AGENT_MEMORY,
         max_seeds=5,
     )
     if USE_SENTINEL and USE_SENTINEL_ADVERSARIAL:
@@ -2150,9 +2452,16 @@ def train():
             task_ids=[str(task_id) for task_id in t_ids],
             variant_seeds=[int(seed) for seed in v_seeds],
             completions=[str(completion) for completion in completions],
+            prompts=[str(prompt) for prompt in prompts],
+            adversarial_cases=[str(case) for case in adv_cases],
             curriculum_summary=curriculum_snapshot,
             prompt_refreshes=prompt_state.prompt_refreshes,
             reward_schedule=reward_schedule,
+            memory_summary={
+                "agent_memory_enabled": USE_AGENT_MEMORY,
+                "feedback_memory_enabled": USE_FEEDBACK_MEMORY,
+                **summarize_agent_memory(memory),
+            },
         )
         audit_path = rollout_auditor.record_batch(
             batch_index=training_monitor.batch_index,
@@ -2211,14 +2520,23 @@ def train():
                 "monitor/effective_prompt_ratio": monitor_summary.get("effective_prompt_ratio", 0.0),
                 "monitor/frontier_hit_rate": monitor_summary.get("frontier_hit_rate", 0.0),
                 "monitor/task_diversity_ratio": monitor_summary.get("task_diversity_ratio", 0.0),
+                "monitor/zero_gradient_group_fraction": monitor_summary.get("zero_gradient_group_fraction", 0.0),
+                "monitor/adversarial_case_fraction": monitor_summary.get("adversarial_case_fraction", 0.0),
             }
+            if monitor_summary.get("memory"):
+                wandb_payload["monitor/memory_total_episodes"] = monitor_summary["memory"].get("total_episodes", 0)
+                wandb_payload["monitor/memory_mistake_cards"] = monitor_summary["memory"].get("mistake_cards_stored", 0)
             if USE_SENTINEL:
                 wandb_payload.update(
                     {
                         "monitor/detection_rate": monitor_summary.get("detection_rate", 0.0),
                         "monitor/false_positive_rate": monitor_summary.get("false_positive_rate", 0.0),
                         "monitor/risk_reduction_rate": monitor_summary.get("risk_reduction_rate", 0.0),
+                        "monitor/twin_damage_reduction_rate": monitor_summary.get("twin_damage_reduction_rate", 0.0),
+                        "monitor/twin_without_sentinel_damage_total": monitor_summary.get("twin_without_sentinel_damage_total", 0.0),
+                        "monitor/twin_with_sentinel_damage_total": monitor_summary.get("twin_with_sentinel_damage_total", 0.0),
                         "monitor/worker_rehabilitation_rate": monitor_summary.get("worker_rehabilitation_rate", 0.0),
+                        "monitor/coaching_quality": monitor_summary.get("coaching_quality", 0.0),
                     }
                 )
             if reward_schedule:
@@ -2275,8 +2593,9 @@ def train():
     # Save curriculum state
     if curriculum:
         logger.info("Curriculum summary: %s", curriculum.summary())
-    save_agent_memory(memory)
-    if USE_SENTINEL:
+    if USE_AGENT_MEMORY:
+        save_agent_memory(memory)
+    if USE_SENTINEL and USE_FEEDBACK_MEMORY:
         save_feedback_memory(feedback_memory, SENTINEL_FEEDBACK_MEMORY_PATH)
     if warm_start_summary:
         logger.info("Warm-start summary: %s", warm_start_summary)
@@ -2285,6 +2604,15 @@ def train():
 
     # Plot reward curve
     _plot_reward_curve()
+    try:
+        from scripts.render_training_dashboard import render_dashboard
+
+        render_dashboard(
+            monitor_dir=TRAIN_MONITOR_DIR,
+            output_dir="outputs/reward_curves",
+        )
+    except Exception as exc:
+        logger.warning("Training dashboard render skipped: %s", exc)
 
     # Push to Hub (if HF_TOKEN set)
     hf_repo = os.getenv("HF_REPO")

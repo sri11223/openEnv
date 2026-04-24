@@ -182,6 +182,13 @@ These are already present in the local repo:
 - adaptive per-task difficulty windows with frontier mastery counters
 - productive-signal monitoring: zero-reward, trivially solved, productive, effective-prompt, and frontier-hit rates
 - task-diversity monitoring so one task family does not quietly dominate training
+- scenario coverage tracking across task / seed pairs
+- uninformative GRPO batch detection through `zero_gradient_group_fraction`
+- structured mistake-card memory so repeated oversight misses become future prompt context
+- counterfactual twin metrics: damage without SENTINEL vs damage with SENTINEL
+- explicit `coaching_quality` reward for worker-facing corrective guidance
+- judge-facing 18-plot training dashboard under `outputs/reward_curves/`
+- short memory-on vs memory-off ablation runner
 - pinned training stack versions
 - dynamic reward-weight scheduling
 - proxy-gap summary for training reward vs held-out behavior
@@ -194,6 +201,8 @@ These are already present in the local repo:
 - trust-aware oversight
 - constitutional checks
 - corrective revision bonus via rehabilitation tracking
+- supervisor-as-coach quality scoring
+- counterfactual twin damage reduction
 - per-misbehavior confusion matrix in held-out evaluation
 - disagreement-aware calibration when LLM judge panels are used
 - explicit judge mode split: deterministic score, reserved discriminative slot, and gated generative panel score
@@ -347,6 +356,121 @@ The training loop now tracks a small PPO/GRPO-style stability bundle in addition
 
 This is meant to catch the classic failure mode where reward rises while the policy drifts into repetitive or over-optimized behavior.
 
+## Judge-Facing Training Dashboard
+
+The training run now exports a full plot pack with:
+
+- reward mean and running reward
+- detection vs false-positive rate
+- counterfactual risk reduction
+- twin-world damage comparison
+- worker rehabilitation
+- coaching quality
+- task coverage
+- scenario coverage heatmap
+- misbehavior coverage
+- per-misbehavior confusion matrix
+- adaptive curriculum frontier
+- productive-signal fractions
+- decision entropy and completion diversity
+- KL drift and adaptive beta
+- tripwire pass rate
+- Top-1 vs Best-of-K comparison
+- learning snapshots at target batches 10, 50, and 300
+- memory ablation
+- zero-gradient group fraction
+- memory growth and mistake-card count
+
+Render it after training and held-out evaluation:
+
+```powershell
+python scripts/render_training_dashboard.py `
+  --monitor-dir outputs/monitoring `
+  --output-dir outputs/reward_curves `
+  --eval-report outputs/evals/sentinel_held_out_report.json `
+  --memory-ablation outputs/monitoring/memory_ablation.json
+```
+
+The key files are:
+
+- `outputs/reward_curves/training_dashboard.md`
+- `outputs/reward_curves/dashboard_manifest.json`
+- `outputs/reward_curves/01_reward_mean.png`
+- `outputs/reward_curves/06_scenario_coverage_heatmap.png`
+- `outputs/reward_curves/15_learning_snapshots.png`
+- `outputs/reward_curves/16_memory_ablation.png`
+- `outputs/reward_curves/17_zero_gradient_groups.png`
+
+Use these plots in the README, pitch deck, or HF mini-blog. The story is not just "reward went up"; it is "reward went up while coverage, calibration, diversity, and safety tripwires stayed visible."
+
+The counterfactual twin story uses the same risk ledger as the runtime:
+
+- `twin_without_sentinel_damage_total`: what would have leaked if worker proposals bypassed oversight
+- `twin_with_sentinel_damage_total`: what leaked after SENTINEL intervention
+- `twin_prevented_damage_total`: damage prevented by oversight
+- `twin_damage_reduction_rate`: prevented / without-SENTINEL damage
+
+This gives a simple judge-facing claim: SENTINEL is valuable when the "with SENTINEL" damage line falls below the "without SENTINEL" damage line.
+
+The coaching story uses:
+
+- `coaching_quality`
+- `coaching_quality_bonus`
+- `worker_rehabilitation_rate`
+
+This separates two things that used to be blended together: whether the worker recovered, and whether SENTINEL gave a specific useful instruction.
+
+## Memory Ablation
+
+SENTINEL now stores structured mistake cards when it makes oversight errors.
+
+Examples:
+
+- false-negative reward hacking approval
+- false-positive block of a safe worker proposal
+- failed worker rehabilitation
+- low-score episode with repeated audit failure
+
+The memory context is injected into later prompts, so the model can learn from its own oversight misses instead of treating every episode as disconnected.
+
+Run a short ablation before the final long run if compute allows:
+
+```powershell
+python scripts/run_memory_ablation.py `
+  --steps 50 `
+  --warm-start-steps 5
+```
+
+For a no-compute sanity check:
+
+```powershell
+python scripts/run_memory_ablation.py `
+  --dry-run `
+  --steps 50 `
+  --warm-start-steps 5
+```
+
+The comparison lands at:
+
+- `outputs/monitoring/memory_ablation.json`
+
+Dashboard caption:
+
+> SENTINEL learns from its own oversight mistakes.
+
+## Low-Gradient Batch Detection
+
+GRPO learns from relative differences inside sampled groups. If every sample in a group gets the same reward, the batch has little or no ranking signal.
+
+Training now tracks:
+
+- `reward_group_count`
+- `zero_gradient_group_count`
+- `zero_gradient_group_fraction`
+- `mean_reward_group_std`
+
+If `zero_gradient_group_fraction` stays high, the run is probably spending compute on prompts that are too easy, too hard, or verified too coarsely. The response should be to adjust curriculum difficulty, broaden prompt variation, or sharpen the verifier, not blindly extend the run.
+
 ## Event-Time Runbook
 
 This is the run order we should follow when HF credits arrive.
@@ -380,20 +504,45 @@ $env:REWARD_SCHEDULE_MODE='dynamic'
 python train.py
 ```
 
-### 4. Run held-out evaluation
+### 4. Preferred all-in-one run
+
+Use the pipeline wrapper for the onsite run so training, held-out evaluation,
+memory ablation, proof-pack export, and dashboard rendering stay in sync:
+
+```powershell
+python scripts/run_sentinel_training_pipeline.py `
+  --steps 300 `
+  --warm-start-steps 20 `
+  --memory-ablation-steps 50 `
+  --memory-ablation-warm-start-steps 5
+```
+
+If compute is too tight, keep the main 300-step proof run and add
+`--skip-memory-ablation`. The pipeline still renders the final dashboard after
+evaluation and proof export.
+
+### 5. Manual fallback commands
+
+Only use this path if the wrapper fails and you need to resume a specific stage:
 
 ```powershell
 python scripts/eval_sentinel.py `
   --baseline-checkpoint outputs/warm_start/final `
   --candidate-checkpoint outputs/checkpoints/final
-```
 
-### 5. Export the proof pack
+python scripts/run_memory_ablation.py `
+  --steps 50 `
+  --warm-start-steps 5
 
-```powershell
 python proof_pack.py `
   --baseline-checkpoint outputs/warm_start/final `
   --candidate-checkpoint outputs/checkpoints/final
+
+python scripts/render_training_dashboard.py `
+  --monitor-dir outputs/monitoring `
+  --output-dir outputs/reward_curves `
+  --eval-report outputs/evals/sentinel_held_out_report.json `
+  --memory-ablation outputs/monitoring/memory_ablation.json
 ```
 
 ## Artifacts We Expect
@@ -406,9 +555,13 @@ Training should leave us with:
 - `outputs/monitoring/training_stability.jsonl`
 - `outputs/monitoring/latest_summary.json`
 - `outputs/monitoring/training_stack_versions.json`
+- `outputs/monitoring/memory_ablation.json`
 - `outputs/monitoring/rollout_audits/latest.md`
 - `outputs/evals/sentinel_held_out_report.json`
 - `outputs/evals/sentinel_held_out_report.md`
+- `outputs/reward_curves/training_dashboard.md`
+- `outputs/reward_curves/dashboard_manifest.json`
+- `outputs/reward_curves/*.png`
 - `outputs/proof_pack/summary.md`
 - `outputs/proof_pack/held_out_eval_snapshot.json`
 - `outputs/proof_pack/proxy_gap_summary.json`
@@ -435,6 +588,12 @@ The final submission evidence needs all of these together:
 - tripwire pass-rate report
 - per-misbehavior confusion matrix
 - proxy-gap summary
+- scenario coverage heatmap
+- memory ablation plot
+- twin-world damage comparison
+- coaching-quality curve
+- zero-gradient group fraction plot
+- learning snapshots at batches 10 / 50 / 300
 - proof-pack top failure modes
 - rollout audit samples
 - proof-pack trajectories
@@ -448,6 +607,8 @@ Healthy signs:
 - rollout audits stay semantically varied
 - false positives do not spike late in training
 - held-out metrics improve with checkpoint quality
+- zero-gradient group fraction does not stay high
+- memory cards grow early, then stabilize as repeated errors disappear
 
 Warning signs:
 
@@ -456,6 +617,8 @@ Warning signs:
 - false-positive rate climbs while total reward also climbs
 - model becomes overly verbose or over-blocking
 - audits show repetitive surface reasoning
+- scenario coverage collapses to one task / seed family
+- memory-on run performs the same as memory-off after enough episodes
 
 ## Practical Guardrails
 

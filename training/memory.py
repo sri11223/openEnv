@@ -66,8 +66,14 @@ def _empty_memory() -> Dict[str, Any]:
         "episode_log": [],         # last MAX_EPISODES_STORED episodes
         "score_history": {},       # task_id → list of float
         "mistakes": [],            # list of str — common mistakes to avoid
+        "mistake_cards": [],
         "successes": [],           # list of str — things that worked well
     }
+
+
+def new_agent_memory() -> Dict[str, Any]:
+    """Return a fresh in-memory store without reading or writing disk."""
+    return _empty_memory()
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +146,7 @@ def record_episode(
     }
     memory["episode_log"].append(log_entry)
     memory["total_episodes"] = memory.get("total_episodes", 0) + 1
+    memory.setdefault("mistake_cards", [])
 
     # Extract mistakes and successes
     for mistake in episode_data.get("mistakes", []):
@@ -150,10 +157,62 @@ def record_episode(
         if success and success not in memory["successes"]:
             memory["successes"].append(success)
 
+    for card in episode_data.get("mistake_cards", []):
+        _record_mistake_card(memory, card, task_id)
+
     # Auto-generate rules from patterns
     _update_rules_from_episode(memory, task_id, score, episode_data)
 
     return memory
+
+
+def _record_mistake_card(memory: Dict[str, Any], card: Dict[str, Any], task_id: str) -> None:
+    """Merge a structured mistake card into memory with seen-count tracking."""
+    if not isinstance(card, dict):
+        return
+    normalized = {
+        "mistake_type": str(card.get("mistake_type") or "unknown_mistake"),
+        "task_id": str(card.get("task_id") or task_id),
+        "worker_id": card.get("worker_id"),
+        "bad_decision": card.get("bad_decision"),
+        "correct_decision": card.get("correct_decision"),
+        "evidence": str(card.get("evidence") or "")[:300],
+        "lesson": str(card.get("lesson") or "Avoid repeating this failure.")[:300],
+    }
+    episode_index = int(memory.get("total_episodes", 0) or 0)
+    key_fields = (
+        normalized["mistake_type"],
+        normalized["task_id"],
+        normalized.get("worker_id") or "",
+        normalized.get("correct_decision") or "",
+    )
+    cards = memory.setdefault("mistake_cards", [])
+    for existing in cards:
+        existing_key = (
+            existing.get("mistake_type"),
+            existing.get("task_id"),
+            existing.get("worker_id") or "",
+            existing.get("correct_decision") or "",
+        )
+        if existing_key == key_fields:
+            existing["seen_count"] = int(existing.get("seen_count", 1)) + 1
+            existing["last_seen_episode"] = episode_index
+            existing["evidence"] = normalized["evidence"] or existing.get("evidence", "")
+            existing["lesson"] = normalized["lesson"] or existing.get("lesson", "")
+            return
+
+    normalized["seen_count"] = 1
+    normalized["first_seen_episode"] = episode_index
+    normalized["last_seen_episode"] = episode_index
+    cards.append(normalized)
+    cards.sort(
+        key=lambda item: (
+            int(item.get("seen_count", 0)),
+            int(item.get("last_seen_episode", 0)),
+        ),
+        reverse=True,
+    )
+    del cards[30:]
 
 
 def _update_rules_from_episode(
@@ -225,6 +284,23 @@ def build_memory_context(
         lines.append("\nMistakes to avoid:")
         for m in mistakes:
             lines.append(f"  - AVOID: {m}")
+
+    mistake_cards = sorted(
+        memory.get("mistake_cards", []),
+        key=lambda item: (
+            int(item.get("seen_count", 0)),
+            int(item.get("last_seen_episode", 0)),
+        ),
+        reverse=True,
+    )[:3]
+    if mistake_cards:
+        lines.append("\nStructured mistake cards:")
+        for card in mistake_cards:
+            seen = int(card.get("seen_count", 1))
+            label = card.get("mistake_type", "mistake")
+            lesson = card.get("lesson", "")
+            evidence = card.get("evidence", "")
+            lines.append(f"  - [{label}, seen {seen}x] {lesson} Evidence: {evidence}")
 
     # Recent episode outcomes for this task
     if task_id:
@@ -367,6 +443,22 @@ def memory_summary(memory: Dict[str, Any]) -> Dict[str, Any]:
         "global_rules":    len(memory.get("global_rules", [])),
         "task_rules":      {k: len(v) for k, v in memory.get("task_rules", {}).items()},
         "mistakes_stored": len(memory.get("mistakes", [])),
+        "mistake_cards_stored": len(memory.get("mistake_cards", [])),
+        "top_mistake_cards": [
+            {
+                "mistake_type": card.get("mistake_type"),
+                "task_id": card.get("task_id"),
+                "seen_count": card.get("seen_count", 0),
+            }
+            for card in sorted(
+                memory.get("mistake_cards", []),
+                key=lambda item: (
+                    int(item.get("seen_count", 0)),
+                    int(item.get("last_seen_episode", 0)),
+                ),
+                reverse=True,
+            )[:5]
+        ],
         "scores_by_task":  {
             k: round(sum(v) / len(v), 3)
             for k, v in memory.get("score_history", {}).items()

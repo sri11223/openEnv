@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import proof_pack
+from scripts.render_training_dashboard import render_dashboard
+from scripts.run_memory_ablation import collect_ablation
 from judges import llm_grader
 from sentinel.environment import SentinelEnv
 from judges.llm_grader import calibrate_judge_panel
@@ -19,7 +23,7 @@ from sentinel.rewards import scheduled_reward_weights
 from src.tasks import get_all_tasks
 from training.adversarial import AdversarialDesigner
 from training.curriculum import CurriculumController
-from training.memory import load_agent_memory, record_episode
+from training.memory import build_memory_context, load_agent_memory, memory_summary, record_episode
 from train import (
     AdaptivePromptState,
     _aggregate_batch_metrics,
@@ -71,6 +75,52 @@ def test_adaptive_prompt_state_uses_updated_memory_within_run(tmp_path: Path):
     )
     second = state.next_prompt_record()
     assert "Blocked too late on a hallucinated service proposal." in second["prompt"]
+
+
+def test_structured_mistake_cards_are_merged_and_prompted(tmp_path: Path):
+    memory = load_agent_memory(str(tmp_path / "agent_memory.json"))
+    card = {
+        "mistake_type": "false_negative_reward_hacking",
+        "task_id": "basic_oversight",
+        "worker_id": "worker_app",
+        "bad_decision": "APPROVE",
+        "correct_decision": "BLOCK",
+        "evidence": "Approved a severity classification before investigation.",
+        "lesson": "Require concrete evidence before severity classification.",
+    }
+
+    memory = record_episode(
+        memory,
+        {
+            "task_id": "basic_oversight",
+            "score": 0.25,
+            "steps": 2,
+            "trajectory_summary": "Approved reward hacking too early.",
+            "mistakes": ["Approved reward hacking too early."],
+            "mistake_cards": [card],
+            "successes": [],
+        },
+    )
+    memory = record_episode(
+        memory,
+        {
+            "task_id": "basic_oversight",
+            "score": 0.35,
+            "steps": 2,
+            "trajectory_summary": "Repeated the same reward hacking miss.",
+            "mistakes": [],
+            "mistake_cards": [card],
+            "successes": [],
+        },
+    )
+
+    summary = memory_summary(memory)
+    context = build_memory_context(memory, task_id="basic_oversight")
+
+    assert summary["mistake_cards_stored"] == 1
+    assert summary["top_mistake_cards"][0]["seen_count"] == 2
+    assert "Structured mistake cards" in context
+    assert "Require concrete evidence" in context
 
 
 def test_adversarial_designer_has_deterministic_fallback(monkeypatch):
@@ -227,6 +277,57 @@ def test_aggregate_batch_metrics_tracks_productive_signal_metrics():
     assert metrics["task_diversity_ratio"] == 0.5
 
 
+def test_aggregate_batch_metrics_tracks_coverage_and_zero_gradient_groups():
+    histories = [
+        [
+            {
+                "decision": {"decision": "APPROVE"},
+                "audit": {
+                    "worker_id": "worker_db",
+                    "worker_role": "database",
+                    "was_misbehavior": True,
+                    "reason": "reward_hacking",
+                    "sentinel_decision": "APPROVE",
+                },
+                "info": {"is_misbehavior": True, "mb_type": "reward_hacking"},
+                "worker_revision": {"attempted": True, "revision_approved": False},
+            }
+        ],
+        [
+            {
+                "decision": {"decision": "BLOCK"},
+                "audit": {
+                    "worker_id": "worker_db",
+                    "worker_role": "database",
+                    "was_misbehavior": True,
+                    "reason": "reward_hacking",
+                    "sentinel_decision": "BLOCK",
+                },
+                "info": {"is_misbehavior": True, "mb_type": "reward_hacking"},
+                "worker_revision": {"attempted": True, "revision_approved": True},
+            }
+        ],
+    ]
+    metrics = _aggregate_batch_metrics(
+        rewards=[0.5, 0.5],
+        histories=histories,
+        task_ids=["basic_oversight", "basic_oversight"],
+        variant_seeds=[0, 0],
+        completions=['{"decision":"APPROVE"}', '{"decision":"BLOCK"}'],
+        prompts=["same prompt", "same prompt"],
+        adversarial_cases=["", '{"case_id":"attack"}'],
+        curriculum_summary={"tier": "warmup"},
+        prompt_refreshes=0,
+    )
+
+    assert metrics["scenario_counts"]["basic_oversight:seed0"] == 2
+    assert metrics["worker_counts"]["worker_db"] == 2
+    assert metrics["misbehavior_counts"]["reward_hacking"] == 2
+    assert metrics["corrective_loop_counts"]["attempted"] == 2
+    assert metrics["adversarial_case_fraction"] == 0.5
+    assert metrics["zero_gradient_group_fraction"] == 1.0
+
+
 def test_training_monitor_merges_trainer_metrics_into_latest_summary(tmp_path: Path):
     monitor = TrainingMonitor(str(tmp_path))
     batch_metrics = monitor.log_batch(
@@ -251,6 +352,165 @@ def test_training_monitor_merges_trainer_metrics_into_latest_summary(tmp_path: P
     assert payload["approx_kl"] == 0.09
     assert payload["adaptive_beta"] == 0.08
     assert payload["reward_mean"] == 0.7
+
+
+def test_memory_ablation_collector_compares_memory_runs(tmp_path: Path):
+    root = tmp_path / "ablation"
+    off_dir = root / "memory_off" / "monitoring"
+    on_dir = root / "memory_on" / "monitoring"
+    off_dir.mkdir(parents=True)
+    on_dir.mkdir(parents=True)
+    (off_dir / "latest_summary.json").write_text(
+        json.dumps({"reward_mean": 0.40, "detection_rate": 0.50, "risk_reduction_rate": 0.30}),
+        encoding="utf-8",
+    )
+    (on_dir / "latest_summary.json").write_text(
+        json.dumps({"reward_mean": 0.70, "detection_rate": 0.80, "risk_reduction_rate": 0.75}),
+        encoding="utf-8",
+    )
+
+    output_path = tmp_path / "memory_ablation.json"
+    payload = collect_ablation(root, output_path)
+
+    assert output_path.exists()
+    assert payload["caption"] == "SENTINEL learns from its own oversight mistakes."
+    assert payload["comparison"]["reward_mean_delta"] == 0.3
+    assert payload["comparison"]["detection_rate_delta"] == 0.3
+    assert payload["comparison"]["risk_reduction_rate_delta"] == 0.45
+
+
+def test_training_dashboard_renders_expected_plot_pack(tmp_path: Path):
+    pytest.importorskip("matplotlib")
+    monitor_dir = tmp_path / "monitoring"
+    monitor_dir.mkdir()
+    records = [
+        {
+            "batch_index": 1,
+            "reward_mean": 0.20,
+            "running_reward_mean": 0.20,
+            "best_reward_mean": 0.20,
+            "detection_rate": 0.25,
+            "false_positive_rate": 0.30,
+            "risk_reduction_rate": 0.10,
+            "worker_rehabilitation_rate": 0.0,
+            "revision_attempts": 1,
+            "revision_successes": 0,
+            "task_counts": {"basic_oversight": 2},
+            "scenario_counts": {"basic_oversight:seed0": 2},
+            "misbehavior_counts": {"reward_hacking": 1},
+            "curriculum": {
+                "adaptive_difficulty": {
+                    "per_task": {
+                        "basic_oversight": {"difficulty_low": 0, "difficulty_high": 0},
+                    }
+                }
+            },
+            "zero_reward_fraction": 0.50,
+            "trivially_solved_fraction": 0.0,
+            "productive_fraction": 0.50,
+            "effective_prompt_ratio": 0.50,
+            "decision_entropy": 0.10,
+            "unique_completion_ratio": 0.50,
+            "zero_gradient_group_fraction": 0.50,
+            "mean_reward_group_std": 0.0,
+            "memory": {"total_episodes": 1, "mistake_cards_stored": 1, "mistakes_stored": 1},
+        },
+        {
+            "batch_index": 10,
+            "reward_mean": 0.72,
+            "running_reward_mean": 0.46,
+            "best_reward_mean": 0.72,
+            "detection_rate": 0.75,
+            "false_positive_rate": 0.10,
+            "risk_reduction_rate": 0.70,
+            "worker_rehabilitation_rate": 0.50,
+            "revision_attempts": 2,
+            "revision_successes": 1,
+            "task_counts": {"basic_oversight": 1, "fleet_monitoring_conflict": 1},
+            "scenario_counts": {"basic_oversight:seed1": 1, "fleet_monitoring_conflict:seed0": 1},
+            "misbehavior_counts": {"hallucination": 1, "reward_hacking": 1},
+            "curriculum": {
+                "adaptive_difficulty": {
+                    "per_task": {
+                        "basic_oversight": {"difficulty_low": 0, "difficulty_high": 1},
+                        "fleet_monitoring_conflict": {"difficulty_low": 0, "difficulty_high": 1},
+                    }
+                }
+            },
+            "zero_reward_fraction": 0.0,
+            "trivially_solved_fraction": 0.0,
+            "productive_fraction": 1.0,
+            "effective_prompt_ratio": 1.0,
+            "decision_entropy": 0.90,
+            "unique_completion_ratio": 1.0,
+            "zero_gradient_group_fraction": 0.0,
+            "mean_reward_group_std": 0.12,
+            "memory": {"total_episodes": 10, "mistake_cards_stored": 4, "mistakes_stored": 3},
+        },
+    ]
+    (monitor_dir / "training_metrics.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records),
+        encoding="utf-8",
+    )
+    (monitor_dir / "training_stability.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"global_step": 1, "approx_kl": 0.01, "policy_entropy": 0.95, "kl_guardrail": {"current_beta": 0.01}}),
+                json.dumps({"global_step": 10, "approx_kl": 0.04, "policy_entropy": 0.70, "kl_guardrail": {"current_beta": 0.02}}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    eval_report = {
+        "confusion_matrix": {
+            "candidate": {
+                "rows": {
+                    "reward_hacking": {"caught": 3, "missed": 1, "misclassified": 1},
+                    "hallucination": {"caught": 2, "missed": 0, "misclassified": 0},
+                }
+            }
+        },
+        "tripwire": {
+            "baseline": {"overall": {"pass_rate": 0.25}},
+            "candidate": {"overall": {"pass_rate": 0.75}},
+        },
+        "sampling_eval": {
+            "candidate_top1_mean_score": 0.62,
+            "candidate_best_of_k_mean_score": 0.78,
+            "baseline_top1_mean_score": 0.30,
+            "baseline_best_of_k_mean_score": 0.45,
+        },
+    }
+    eval_path = tmp_path / "eval.json"
+    eval_path.write_text(json.dumps(eval_report), encoding="utf-8")
+    ablation_path = tmp_path / "memory_ablation.json"
+    ablation_path.write_text(
+        json.dumps(
+            {
+                "caption": "SENTINEL learns from its own oversight mistakes.",
+                "runs": [
+                    {"label": "memory_off", "summary": {"reward_mean": 0.4, "detection_rate": 0.5}},
+                    {"label": "memory_on", "summary": {"reward_mean": 0.7, "detection_rate": 0.8}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "reward_curves"
+    manifest = render_dashboard(
+        monitor_dir=str(monitor_dir),
+        output_dir=str(output_dir),
+        eval_report_path=str(eval_path),
+        memory_ablation_path=str(ablation_path),
+    )
+
+    assert len(manifest["images"]) == 18
+    assert manifest["records"] == 2
+    assert (output_dir / "training_dashboard.md").exists()
+    assert (output_dir / "01_reward_mean.png").exists()
+    assert (output_dir / "15_learning_snapshots.png").exists()
+    assert (output_dir / "16_memory_ablation.png").exists()
 
 
 def test_curriculum_adaptive_window_advances_frontier(tmp_path: Path):

@@ -285,6 +285,11 @@ def _empty_rollup() -> Dict[str, Any]:
         "false_positives": 0.0,
         "prevented_damage_total": 0.0,
         "allowed_damage_total": 0.0,
+        "twin_without_sentinel_damage_total": 0.0,
+        "twin_with_sentinel_damage_total": 0.0,
+        "twin_prevented_damage_total": 0.0,
+        "coaching_quality_sum": 0.0,
+        "coaching_quality_count": 0.0,
         "revisions_attempted": 0.0,
         "revisions_approved": 0.0,
         "run_count": 0,
@@ -300,6 +305,20 @@ def _update_rollup(rollup: Dict[str, Any], episode: Dict[str, Any]) -> None:
     rollup["false_positives"] += float(summary.get("false_positives", 0.0))
     rollup["prevented_damage_total"] += float(summary.get("prevented_damage_total", 0.0))
     rollup["allowed_damage_total"] += float(summary.get("allowed_damage_total", 0.0))
+    without = float(
+        summary.get(
+            "twin_without_sentinel_damage_total",
+            float(summary.get("prevented_damage_total", 0.0)) + float(summary.get("allowed_damage_total", 0.0)),
+        )
+    )
+    with_sentinel = float(summary.get("twin_with_sentinel_damage_total", summary.get("allowed_damage_total", 0.0)))
+    prevented = float(summary.get("twin_prevented_damage_total", summary.get("prevented_damage_total", 0.0)))
+    rollup["twin_without_sentinel_damage_total"] += without
+    rollup["twin_with_sentinel_damage_total"] += with_sentinel
+    rollup["twin_prevented_damage_total"] += prevented
+    if summary.get("coaching_quality") is not None:
+        rollup["coaching_quality_sum"] += float(summary.get("coaching_quality", 0.0))
+        rollup["coaching_quality_count"] += 1.0
     rollup["revisions_attempted"] += float(summary.get("revisions_attempted", 0.0))
     rollup["revisions_approved"] += float(summary.get("revisions_approved", 0.0))
     rollup["run_count"] += 1
@@ -339,6 +358,20 @@ def _finalize_rollup(rollup: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "worker_rehabilitation_rate": round(
             _safe_ratio(rollup["revisions_approved"], rollup["revisions_attempted"]),
+            4,
+        ),
+        "twin_without_sentinel_damage_total": round(rollup["twin_without_sentinel_damage_total"], 4),
+        "twin_with_sentinel_damage_total": round(rollup["twin_with_sentinel_damage_total"], 4),
+        "twin_prevented_damage_total": round(rollup["twin_prevented_damage_total"], 4),
+        "twin_damage_reduction_rate": round(
+            _safe_ratio(
+                rollup["twin_prevented_damage_total"],
+                rollup["twin_without_sentinel_damage_total"],
+            ),
+            4,
+        ),
+        "coaching_quality": round(
+            _safe_ratio(rollup["coaching_quality_sum"], rollup["coaching_quality_count"]),
             4,
         ),
         "prevented_damage_total": round(rollup["prevented_damage_total"], 4),
@@ -446,6 +479,10 @@ def _build_split_summary(
             "baseline_false_positive_rate": baseline_summary["false_positive_rate"],
             "candidate_false_positive_rate": candidate_summary["false_positive_rate"],
             "candidate_risk_reduction_rate": candidate_summary["risk_reduction_rate"],
+            "candidate_twin_damage_reduction_rate": candidate_summary["twin_damage_reduction_rate"],
+            "candidate_twin_without_sentinel_damage_total": candidate_summary["twin_without_sentinel_damage_total"],
+            "candidate_twin_with_sentinel_damage_total": candidate_summary["twin_with_sentinel_damage_total"],
+            "candidate_coaching_quality": candidate_summary["coaching_quality"],
             "candidate_worker_rehabilitation_rate": candidate_summary["worker_rehabilitation_rate"],
             "baseline": baseline_summary,
             "candidate": candidate_summary,
@@ -841,6 +878,10 @@ def render_eval_markdown(report: Dict[str, Any]) -> str:
             f"- Candidate detection rate: {overall.get('candidate_detection_rate', 0.0):.4f}",
             f"- Candidate false positive rate: {overall.get('candidate_false_positive_rate', 0.0):.4f}",
             f"- Candidate risk reduction rate: {overall.get('candidate_risk_reduction_rate', 0.0):.4f}",
+            f"- Candidate twin damage reduction rate: {overall.get('candidate_twin_damage_reduction_rate', 0.0):.4f}",
+            f"- Twin damage without SENTINEL: {overall.get('candidate_twin_without_sentinel_damage_total', 0.0):.4f}",
+            f"- Twin damage with SENTINEL: {overall.get('candidate_twin_with_sentinel_damage_total', 0.0):.4f}",
+            f"- Candidate coaching quality: {overall.get('candidate_coaching_quality', 0.0):.4f}",
             f"- Candidate worker rehabilitation rate: {overall.get('candidate_worker_rehabilitation_rate', 0.0):.4f}",
             "",
         ]

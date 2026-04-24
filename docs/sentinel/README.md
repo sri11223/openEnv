@@ -2,6 +2,29 @@
 
 > The OpenEnv environment in this repo that trains an agent to supervise other agents before their actions execute.
 
+## Hackathon Theme Fit
+
+Primary fit: **Theme #1 - Multi-Agent Interactions**.
+
+SENTINEL is an oversight environment, not only an incident-response benchmark.
+The trained policy must model worker intent, hidden reliability, domain
+boundaries, adversarial proposals, corrective revisions, and counterfactual
+damage. That maps cleanly to multi-agent cooperation, conflict, and partially
+observable incentives.
+
+Secondary fits:
+
+- **Theme #2 - Long-Horizon Planning:** `multi_crisis_command` runs multiple concurrent incidents with delayed consequences.
+- **Theme #3.1 - Professional Tasks:** the world is a realistic SRE/API/metrics workflow.
+- **Theme #4 - Self-Improvement:** adaptive curriculum, frontier tracking, and tripwire evals support escalating difficulty.
+
+Latest OpenEnv compliance note: `server/openenv_native.py` wraps SENTINEL in
+OpenEnv's `Environment` base class and the main app mounts it at `/openenv`
+when OpenEnv dependencies are installed.
+
+Training notebook: [`../../notebooks/sentinel_qwen3_4b_grpo_colab.ipynb`](../../notebooks/sentinel_qwen3_4b_grpo_colab.ipynb)
+is the Colab-friendly Qwen3-4B GRPO runner for the final onsite training proof.
+
 ## Summary
 
 SENTINEL wraps the incident-response world in this repo with an oversight layer:
@@ -188,21 +211,42 @@ Training now writes structured metrics to:
 - `outputs/monitoring/training_metrics.jsonl`
 - `outputs/monitoring/latest_summary.json`
 - `outputs/monitoring/training_stack_versions.json`
+- `outputs/monitoring/training_stability.jsonl`
+- `outputs/monitoring/memory_ablation.json`
 - `outputs/monitoring/rollout_audits/latest.md`
+- `outputs/reward_curves/training_dashboard.md`
 
 These logs include:
 
 - reward mean/min/max/std
 - average steps
 - per-task metrics
+- task and scenario coverage
+- per-misbehavior coverage
 - zero-reward, trivially solved, and productive fractions
 - effective prompt ratio and frontier-hit rate
+- zero-gradient group fraction for low-signal GRPO batches
 - detection rate
 - false positive rate
 - risk reduction rate
+- twin damage reduction rate
+- coaching quality
 - worker rehabilitation rate
 - reward schedule stage / progress
+- structured mistake-card memory counts
 - periodic rollout-audit samples for human inspection
+
+The plot pack is generated with:
+
+```bash
+python scripts/render_training_dashboard.py \
+  --monitor-dir outputs/monitoring \
+  --output-dir outputs/reward_curves \
+  --eval-report outputs/evals/sentinel_held_out_report.json \
+  --memory-ablation outputs/monitoring/memory_ablation.json
+```
+
+It creates 18 judge-facing images, including scenario coverage, learning snapshots at target batches 10 / 50 / 300, memory ablation, KL drift, tripwire pass rate, twin-world damage comparison, coaching quality, and zero-gradient group fraction.
 
 ## Proof Pack
 
@@ -290,6 +334,9 @@ python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final -
 
 # export proof artifacts
 python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final
+
+# render judge-facing plots
+python scripts/render_training_dashboard.py --monitor-dir outputs/monitoring --output-dir outputs/reward_curves
 ```
 
 ## Demo Story
@@ -342,6 +389,13 @@ What is fully real now:
 - per-misbehavior confusion matrix
 - proxy-gap summary
 - top failure modes summary
+- counterfactual twin metrics
+- coaching-quality reward
+- training dashboard renderer
+- memory ablation collector
+- structured mistake-card memory
+- scenario coverage tracking
+- zero-gradient group monitoring
 - dynamic reward-weight scheduling
 - KL-drift guardrail with adaptive beta
 - decision entropy / diversity monitoring

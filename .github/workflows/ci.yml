@@ -53,14 +53,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -t incident-response-triage:ci .
+        run: docker build -t sentinel-oversight-command:ci .
 
       - name: Start container
         run: |
           docker run -d \
             --name irt-test \
             -p 7860:7860 \
-            incident-response-triage:ci
+            sentinel-oversight-command:ci
           echo "Waiting for server..."
           for i in $(seq 1 30); do
             if curl -sf http://localhost:7860/health > /dev/null 2>&1; then
@@ -73,6 +73,21 @@ jobs:
         run: |
           STATUS=$(curl -sf http://localhost:7860/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
           test "$STATUS" = "ok" && echo "Health OK" || (echo "Health FAIL: $STATUS"; exit 1)
+          NATIVE=$(curl -sf http://localhost:7860/health | python3 -c "import sys,json; print(str(json.load(sys.stdin).get('native_openenv_available', False)).lower())")
+          test "$NATIVE" = "true" && echo "Native OpenEnv mount OK" || (echo "Native OpenEnv mount missing"; exit 1)
+
+      - name: Verify native OpenEnv endpoints
+        run: |
+          curl -sf http://localhost:7860/openenv/schema | python3 -c "import sys,json; data=json.load(sys.stdin); assert 'action' in data and 'observation' in data and 'state' in data; print('Native schema OK')"
+          curl -sf -X POST http://localhost:7860/openenv/reset \
+            -H "Content-Type: application/json" \
+            -d '{"task_id":"basic_oversight","seed":1}' \
+            | python3 -c "import sys,json; data=json.load(sys.stdin); assert data['observation']['task_id']=='basic_oversight'; assert data['observation']['proposed_action']; print('Native reset OK')"
+          curl -sf -X POST http://localhost:7860/openenv/step \
+            -H "Content-Type: application/json" \
+            -d '{"action":{"action":"APPROVE","explanation":"CI smoke test for native OpenEnv adapter."}}' \
+            | python3 -c "import sys,json; data=json.load(sys.stdin); assert isinstance(data.get('reward'), (int,float)); assert 'observation' in data; print('Native step OK', data['reward'])"
+          curl -sf http://localhost:7860/openenv/state | python3 -c "import sys,json; data=json.load(sys.stdin); assert 'step_count' in data; print('Native state OK')"
 
       - name: Verify tasks endpoint
         run: |

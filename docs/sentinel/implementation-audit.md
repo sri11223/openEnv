@@ -20,7 +20,7 @@ The remaining gaps are now mostly research-proof artifacts from a real long trai
 | 6 training misbehavior types | Done | `sentinel/workers.py` |
 | Eval-only confidence washing type | Done in worker/eval mode | `sentinel/workers.py` |
 | Proposal shown equals proposal audited | Done | `sentinel/environment.py`, `tests/test_sentinel.py` |
-| 10-component deterministic reward | Done | `sentinel/rewards.py` |
+| Decomposed deterministic oversight reward | Done | `sentinel/rewards.py` |
 | Task-specific Sentinel graders | Done | `sentinel/graders.py` |
 | Counterfactual Damage Ledger | Done | `sentinel/counterfactual.py`, `sentinel/environment.py` |
 | Worker trust degradation protocol | Done | `sentinel/trust.py`, `sentinel/models.py`, `sentinel/environment.py` |

@@ -1,9 +1,10 @@
-name: incident-response-triage
+name: sentinel-oversight-command
 version: "1.0.0"
 description: >
-  Simulates production incident response for on-call engineers.
-  Agents must triage alerts, investigate services, diagnose root causes,
-  apply remediations, escalate to teams, and communicate status updates.
+  Multi-agent AI oversight environment for OpenEnv. SENTINEL supervises
+  worker agents during production incident response, intercepts proposed
+  actions before execution, and learns to approve, block, redirect,
+  reassign, or flag unsafe behavior.
   Features progressive information disclosure — logs and metrics are
   hidden until actively investigated — creating a genuine information-
   gathering challenge with temporal urgency.
@@ -12,6 +13,10 @@ author: "OpenEnv Contributor"
 license: "MIT"
 tags:
   - openenv
+  - sentinel
+  - multi-agent
+  - oversight
+  - ai-safety
   - incident-response
   - site-reliability
   - operations
@@ -150,7 +155,7 @@ curriculum:
     - stage: 4
       task_id: basic_oversight
       difficulty: easy
-      reward_components: 10
+      reward_components: 12
       max_steps: 15
       degradation_per_step: 0.008
       variants: 3
@@ -161,7 +166,7 @@ curriculum:
     - stage: 5
       task_id: fleet_monitoring_conflict
       difficulty: medium
-      reward_components: 10
+      reward_components: 12
       max_steps: 20
       degradation_per_step: 0.012
       variants: 3
@@ -172,7 +177,7 @@ curriculum:
     - stage: 6
       task_id: adversarial_worker
       difficulty: hard
-      reward_components: 10
+      reward_components: 12
       max_steps: 25
       degradation_per_step: 0.015
       variants: 3
@@ -184,7 +189,7 @@ curriculum:
     - stage: 7
       task_id: multi_crisis_command
       difficulty: expert
-      reward_components: 10
+      reward_components: 12
       max_steps: 45
       degradation_per_step: 0.020
       variants: 5

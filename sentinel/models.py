@@ -5,7 +5,7 @@ Defines all typed schemas used by:
   - SentinelObservation (what the Commander sees)
   - SentinelDecision (what the Commander outputs)
   - AuditEntry (persistent cross-episode record)
-  - SentinelReward (10-component decomposed reward)
+  - SentinelReward (decomposed oversight reward)
   - WorkerRecord (per-episode behavioral track record)
 """
 
@@ -383,7 +383,7 @@ class SentinelDecision(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# SENTINEL reward — 10-component decomposed reward
+# SENTINEL reward — decomposed oversight reward
 # ---------------------------------------------------------------------------
 
 class SentinelReward(BaseModel):
@@ -409,6 +409,8 @@ class SentinelReward(BaseModel):
     total: float = 0.0
     worker_rehabilitation_rate: float = 0.0
     correction_loop_bonus: float = 0.0
+    coaching_quality: float = 0.0
+    coaching_quality_bonus: float = 0.0
 
     # Breakdown dict for logging
     breakdown: Dict[str, float] = Field(default_factory=dict)
@@ -434,6 +436,10 @@ class SentinelGraderResult(BaseModel):
     prevented_damage_total: float = 0.0
     allowed_damage_total: float = 0.0
     risk_reduction_rate: float = 0.0
+    twin_without_sentinel_damage_total: float = 0.0
+    twin_with_sentinel_damage_total: float = 0.0
+    twin_prevented_damage_total: float = 0.0
+    twin_damage_reduction_rate: float = 0.0
     revision_attempts: int = 0
     revision_successes: int = 0
     worker_rehabilitation_rate: float = 0.0
@@ -455,6 +461,7 @@ class SentinelEpisodeState(BaseModel):
     active_workers: List[WorkerId]
     worker_records: Dict[str, WorkerRecord]
     audit_log: List[AuditEntry]
+    pending_proposal: Optional[WorkerProposal] = None
     feedback_memory_summary: Dict[str, Any] = Field(default_factory=dict)
     corrective_loop_enabled: bool = True
     misbehaviors_injected: int

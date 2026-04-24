@@ -512,6 +512,13 @@ class SentinelEnv:
             prevented_damage_total=round(self._prevented_damage_total, 4),
             allowed_damage_total=round(self._allowed_damage_total, 4),
             risk_reduction_rate=round(self._risk_reduction_rate(), 4),
+            twin_without_sentinel_damage_total=round(
+                self._prevented_damage_total + self._allowed_damage_total,
+                4,
+            ),
+            twin_with_sentinel_damage_total=round(self._allowed_damage_total, 4),
+            twin_prevented_damage_total=round(self._prevented_damage_total, 4),
+            twin_damage_reduction_rate=round(self._risk_reduction_rate(), 4),
             revision_attempts=self._revision_attempts,
             revision_successes=self._revision_successes,
             worker_rehabilitation_rate=round(self._worker_rehabilitation_rate(), 4),
@@ -543,6 +550,7 @@ class SentinelEnv:
             active_workers=list(self._fleet.active_worker_ids),
             worker_records=dict(self._worker_records),
             audit_log=list(self._audit_log),
+            pending_proposal=self._pending_proposal,
             feedback_memory_summary=self._feedback_summary_for_worker(
                 self._pending_proposal.worker_id if self._pending_proposal else None
             ),
