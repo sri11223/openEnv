@@ -1,5 +1,5 @@
 """
-train.py — GRPO Fine-tuning for OpenEnv (IRT / SENTINEL)
+train.py - GRPO Fine-tuning for OpenEnv (IRT / SENTINEL)
 ==============================================================
 Runnable training script. Uses TRL GRPOTrainer + Unsloth (optional) + curriculum.
 
@@ -57,6 +57,10 @@ from transformers import TrainerCallback
 # Re-export from extracted modules for backward compatibility
 from training.metrics import (
     safe_ratio as _safe_ratio,
+    _increment_counter,
+    _normalize_completion_text,
+    _extract_completion_choice,
+    _shannon_entropy_from_labels,
     summarize_sentinel_history as _summarize_sentinel_history,
     aggregate_batch_metrics as _aggregate_batch_metrics,
     completion_diversity_metrics as _completion_diversity_metrics,
@@ -70,6 +74,8 @@ from training.monitoring import (
     TrainingMonitor,
     GRPOStabilityCallback,
     RolloutAuditSampler,
+    _truncate_text,
+    _audit_priority,
 )
 from training.prompts import (
     build_system_prompt,
@@ -89,6 +95,8 @@ from training.episodes import (
     greedy_fallback_action as _greedy_fallback_action,
     greedy_fallback_sentinel_decision as _greedy_fallback_sentinel_decision,
     run_episode_with_completion as _run_episode_with_completion_impl,
+    _run_irt_episode,
+    _run_sentinel_episode,
     run_sentinel_adversarial_case as _run_sentinel_adversarial_case,
     grpo_reward_fn as _grpo_reward_fn_impl,
     trajectory_summary_from_history as _trajectory_summary_from_history,
@@ -101,7 +109,7 @@ from training.curriculum import CURRICULUM_FRONTIER_FAILURE_RATE
 MODEL_NAME      = os.getenv("MODEL_NAME", "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit")
 HF_TOKEN        = os.getenv("HF_TOKEN", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
-WANDB_PROJECT   = os.getenv("WANDB_PROJECT", "openenv-grpo")
+WANDB_PROJECT   = os.getenv("WANDB_PROJECT", "").strip()
 TRAIN_STEPS     = int(os.getenv("TRAIN_STEPS", "200"))
 NUM_GENERATIONS = int(os.getenv("NUM_GENERATIONS", "4"))
 USE_UNSLOTH     = os.getenv("USE_UNSLOTH", "0") == "1"
@@ -241,7 +249,7 @@ def collect_training_stack_versions() -> Dict[str, Any]:
 # W&B setup (optional)
 # ---------------------------------------------------------------------------
 
-wandb_enabled = bool(WANDB_PROJECT)
+wandb_enabled = bool(WANDB_PROJECT) and WANDB_PROJECT.lower() not in {"0", "false", "none", "disabled"}
 if wandb_enabled:
     try:
         import wandb
@@ -348,6 +356,9 @@ def load_model_and_tokenizer():
 # ---------------------------------------------------------------------------
 # Backward-compatible re-exports for tests
 AdaptivePromptState = _AdaptivePromptStateBase
+build_prompt_record = _build_prompt_record_impl
+build_grpo_dataset = _build_grpo_dataset_impl
+_load_or_create_sentinel_adversarial_cases = _load_or_create_sentinel_adversarial_cases_impl
 _aggregate_batch_metrics = _aggregate_batch_metrics
 _sentinel_history_entry = None  # re-exported below
 
@@ -868,7 +879,7 @@ def _plot_reward_curve():
         logger.info("Saved reward curve to %s", plot_path)
 
     except ImportError:
-        logger.info("matplotlib not installed — skipping reward plot")
+        logger.info("matplotlib not installed - skipping reward plot")
     except Exception as e:
         logger.warning("Could not plot reward curve: %s", e)
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """IRT (Incident Response Triage) API endpoints.
 
-Extracted from app.py — handles /reset, /step, /state, /tasks, /grader, /baseline.
+Extracted from app.py - handles /reset, /step, /state, /tasks, /grader, /baseline.
 """
 
 from __future__ import annotations

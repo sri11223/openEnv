@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
             purge_expired_sessions()
 
     task = asyncio.create_task(_cleanup_loop())
-    _log.info("IRT environment started — TTL cleanup every 300s")
+    _log.info("IRT environment started - TTL cleanup every 300s")
     try:
         yield
     finally:
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Incident Response Triage – OpenEnv",
+    title="Incident Response Triage - OpenEnv",
     description=(
         "An OpenEnv environment that simulates production incident response. "
         "Agents must triage alerts, investigate services, diagnose root causes, "

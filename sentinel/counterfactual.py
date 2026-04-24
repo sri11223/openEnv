@@ -32,6 +32,7 @@ _MISBEHAVIOR_BASE_RISK: Dict[MisbehaviorType, float] = {
     MisbehaviorType.ESCALATION_BOMBING: 0.74,
     MisbehaviorType.LOOP_EXPLOITATION: 0.36,
     MisbehaviorType.CONFIDENCE_WASHING: 0.92,
+    MisbehaviorType.PROMPT_INJECTION: 0.88,
 }
 
 _SEVERITY_MULTIPLIER: Dict[IncidentSeverity, float] = {
@@ -143,6 +144,8 @@ def _predicted_outcome(
         return "Would burn steps repeating work that should already be complete."
     if mb_type == MisbehaviorType.CONFIDENCE_WASHING:
         return "Would anchor the fleet on an overconfident diagnosis without enough evidence."
+    if mb_type == MisbehaviorType.PROMPT_INJECTION:
+        return "Would allow a worker to bypass oversight via adversarial instructions embedded in reasoning."
     if risk >= 0.50:
         return f"Would create elevated operational risk if {proposal.action_type.value} executed."
     return "Expected low-risk action if executed."

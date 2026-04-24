@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Observability, metrics, dashboard, and WebSocket endpoints.
 
-Extracted from app.py — handles /metrics, /render, /leaderboard, /curriculum,
+Extracted from app.py - handles /metrics, /render, /leaderboard, /curriculum,
 /prometheus/*, /ws, /web, and /sentinel/dashboard.
 """
 
@@ -44,8 +44,8 @@ router = APIRouter()
 async def metrics(format: str = "json"):
     """Return telemetry counters.
 
-    ?format=prometheus  → Prometheus text format
-    ?format=json        → JSON (default)
+    ?format=prometheus  -> Prometheus text format
+    ?format=json        -> JSON (default)
     """
     if format == "prometheus":
         lines = ["# HELP irt_counter OpenEnv IRT telemetry", "# TYPE irt_counter gauge"]
@@ -82,12 +82,12 @@ async def render(
         raise HTTPException(status_code=400, detail=str(exc))
 
     sev = s.severity_classified.value if s.severity_classified else "(not classified)"
-    status_icon = "✅" if s.done else "⏳"
+    status_icon = "[done]" if s.done else "[open]"
     bar_filled = int((s.step_number / s.max_steps) * 20)
-    progress_bar = "█" * bar_filled + "░" * (20 - bar_filled)
+    progress_bar = "#" * bar_filled + "." * (20 - bar_filled)
 
     lines = [
-        f"## 🚨 INCIDENT DASHBOARD — {s.task_id.replace('_', ' ').upper()}",
+        f"## INCIDENT DASHBOARD - {s.task_id.replace('_', ' ').upper()}",
         "",
         f"| Field          | Value |",
         f"|----------------|-------|",
@@ -98,23 +98,23 @@ async def render(
         f"| **Diagnosis**  | `{s.diagnosis or '(none)'}` |",
         f"| **Reward**     | `{s.cumulative_reward:.4f}` |",
         "",
-        "### 🚧 Actions Taken",
+        "### Actions Taken",
     ]
     if s.actions_history:
         for i, a in enumerate(s.actions_history, 1):
-            lines.append(f"{i}. `{a['action_type'].value}` → `{a.get('target', '')}` | {a.get('reasoning', '')[:80]}")
+            lines.append(f"{i}. `{a['action_type'].value}` -> `{a.get('target', '')}` | {a.get('reasoning', '')[:80]}")
     else:
         lines.append("_No actions yet._")
 
     lines += [
         "",
-        f"### 🔍 Investigated Services",
+        f"### Investigated Services",
         ", ".join(f"`{s}`" for s in s.investigated_services) or "_None_",
         "",
-        f"### 🛠 Remediations Applied",
+        f"### Remediations Applied",
         ", ".join(f"`{r}`" for r in s.remediations_applied) or "_None_",
         "",
-        f"### 📯 Escalations",
+        f"### Escalations",
         ", ".join(f"`{e}`" for e in s.escalations_made) or "_None_",
     ]
 
@@ -125,7 +125,7 @@ async def render(
 async def leaderboard():
     """Return top scores per task from all completed episodes in this session.
 
-    Scores are ranked by (score DESC, steps ASC) — accuracy first, then efficiency.
+    Scores are ranked by (score DESC, steps ASC) - accuracy first, then efficiency.
     """
     return {
         task_id: board
@@ -215,11 +215,11 @@ async def prometheus_scenario_metrics(
     """Prometheus text-format scrape endpoint for the current scenario state.
 
     Returns all service metrics with blast-radius degradation applied at the
-    current step — the system degrades the longer the agent waits, exactly as
+    current step - the system degrades the longer the agent waits, exactly as
     in production Prometheus. No action cost: purely passive observability.
 
-    - ``?fmt=text`` (default) — Prometheus text exposition format (standard scrape)
-    - ``?fmt=json``           — JSON dict keyed by service name
+    - ``?fmt=text`` (default) - Prometheus text exposition format (standard scrape)
+    - ``?fmt=json``           - JSON dict keyed by service name
     """
     if not x_session_id or x_session_id not in _SESSION_REGISTRY:
         raise HTTPException(
@@ -246,7 +246,7 @@ async def prometheus_instant_query(
 
     Returns a standard Prometheus JSON response envelope so agents can use
     ``prometheus-api-client`` or any PromQL helper directly.  No server-side
-    evaluation of complex PromQL — selectors only.
+    evaluation of complex PromQL - selectors only.
 
     Supported selectors::
 
@@ -328,12 +328,12 @@ async def prometheus_range_query(
 
 
 # ---------------------------------------------------------------------------
-# WebSocket endpoint — one env instance per connection, no session header
+# WebSocket endpoint - one env instance per connection, no session header
 # ---------------------------------------------------------------------------
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket persistent session — one isolated env instance per connection.
+    """WebSocket persistent session - one isolated env instance per connection.
 
     Message protocol (JSON):
       Client sends: {"type": "reset", "task_id": "...", "variant_seed": 0}
@@ -343,13 +343,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     Server replies: {"type": "reset"|"step"|"state"|"grade"|"error", ...payload}
 
-    No X-Session-ID header needed — the connection itself is the session.
+    No X-Session-ID header needed - the connection itself is the session.
     """
     await websocket.accept()
     env = IncidentResponseEnv()
     _deps.WS_ACTIVE_CONNECTIONS += 1
     _TELEMETRY["ws_connections_total"] += 1
-    _log.info("ws connected — active=%d", _deps.WS_ACTIVE_CONNECTIONS)
+    _log.info("ws connected - active=%d", _deps.WS_ACTIVE_CONNECTIONS)
     try:
         while True:
             raw = await websocket.receive_json()
@@ -409,4 +409,4 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
     finally:
         _deps.WS_ACTIVE_CONNECTIONS -= 1
-        _log.info("ws disconnected — active=%d", _deps.WS_ACTIVE_CONNECTIONS)
+        _log.info("ws disconnected - active=%d", _deps.WS_ACTIVE_CONNECTIONS)

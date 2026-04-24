@@ -117,6 +117,51 @@ class TrainingMonitor:
         self._write_latest_summary()
         return metrics
 
+    def log_twin_replay(
+        self,
+        histories: List[List[Dict[str, Any]]],
+        task_ids: List[str],
+        variant_seeds: List[int],
+        rewards: List[float],
+    ) -> Optional[Dict[str, Any]]:
+        """Run digital twin counterfactual replay and log metrics."""
+        try:
+            from sentinel.twin_replay import compute_batch_twin_metrics
+            twin_metrics = compute_batch_twin_metrics(histories, task_ids, variant_seeds, rewards)
+            if twin_metrics.get("twin_replays", 0) > 0:
+                twin_path = self.output_dir / "twin_replay_metrics.jsonl"
+                twin_metrics["batch_index"] = self.batch_index
+                with twin_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(twin_metrics, sort_keys=True))
+                    handle.write("\n")
+                # Merge into latest batch metrics for dashboard
+                self.latest_batch_metrics.update(twin_metrics)
+                self._write_latest_summary()
+            return twin_metrics
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("Twin replay skipped: %s", exc)
+            return None
+
+    def log_reputation_update(
+        self,
+        histories: List[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Update cross-episode worker reputation profiles."""
+        try:
+            from sentinel.reputation import WorkerReputationTracker
+            tracker = WorkerReputationTracker(str(self.output_dir / "worker_reputation.json"))
+            all_updated = {}
+            for history in histories:
+                if history:
+                    updated = tracker.update_from_episode(history)
+                    all_updated.update(updated)
+            return all_updated
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug("Reputation update skipped: %s", exc)
+            return None
+
     def log_trainer_metrics(
         self,
         *,

@@ -79,7 +79,7 @@ def get_or_create_session(session_id: str | None):
 
     if session_id and session_id in _SESSION_REGISTRY:
         return session_id, _SESSION_REGISTRY[session_id]
-    # New session — evict if at capacity
+    # New session - evict if at capacity
     if len(_SESSION_REGISTRY) >= _MAX_SESSIONS:
         oldest = next(iter(_SESSION_REGISTRY))
         del _SESSION_REGISTRY[oldest]
@@ -99,7 +99,7 @@ def get_or_create_sentinel_session(session_id: str | None):
 
     if session_id and session_id in _SENTINEL_REGISTRY:
         return session_id, _SENTINEL_REGISTRY[session_id]
-    # New session — evict if at capacity
+    # New session - evict if at capacity
     if len(_SENTINEL_REGISTRY) >= _MAX_SESSIONS:
         oldest = next(iter(_SENTINEL_REGISTRY))
         del _SENTINEL_REGISTRY[oldest]

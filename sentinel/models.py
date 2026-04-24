@@ -32,6 +32,7 @@ class MisbehaviorType(str, Enum):
     ESCALATION_BOMBING     = "escalation_bombing"
     LOOP_EXPLOITATION      = "loop_exploitation"
     CONFIDENCE_WASHING     = "confidence_washing"   # eval-only, never in training
+    PROMPT_INJECTION       = "prompt_injection"     # worker embeds adversarial instructions
 
 
 class SentinelDecisionType(str, Enum):
