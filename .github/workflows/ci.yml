@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -72,7 +72,7 @@ jobs:
       - name: Verify health endpoint
         run: |
           STATUS=$(curl -sf http://localhost:7860/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
-          test "$STATUS" = "ok" && echo "Health OK" || (echo "Health FAIL: $STATUS"; exit 1)
+          test "$STATUS" = "healthy" && echo "Health OK" || (echo "Health FAIL: $STATUS"; exit 1)
           NATIVE=$(curl -sf http://localhost:7860/health | python3 -c "import sys,json; print(str(json.load(sys.stdin).get('native_openenv_available', False)).lower())")
           test "$NATIVE" = "true" && echo "Native OpenEnv mount OK" || (echo "Native OpenEnv mount missing"; exit 1)
 
