@@ -1,0 +1,3 @@
+model,mean_score,std_score,catch_rate,mean_fp,n
+base,0.212,0.118,0.676,6.225,40
+phase1,0.276,0.027,0.679,7.0,40

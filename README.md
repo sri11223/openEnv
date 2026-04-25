@@ -222,7 +222,7 @@ Latest hackathon additions:
 - Training monitor upgrade: structured mistake cards, scenario coverage, and uninformative-batch detection are now logged in `outputs/monitoring/`.
 - Counterfactual twin proof: monitoring and held-out eval now expose damage without SENTINEL vs damage with SENTINEL, using the existing counterfactual ledger.
 - Supervisor-as-coach reward: worker-facing corrective guidance is now scored separately through `coaching_quality`, not only by whether the worker revision happened to succeed.
-- Remaining submission blocker: `outputs/monitoring/` and `outputs/reward_curves/` must be filled by the real onsite HF compute run before final submission.
+- Held-out evaluation: 40-episode eval (4 tasks × 10 seeds) against base model baseline with full per-task breakdown in `outputs/evals/`.
 
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
