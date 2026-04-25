@@ -306,13 +306,15 @@ def load_model_and_tokenizer():
     if USE_UNSLOTH:
         logger.info("Loading model with Unsloth: %s", MODEL_NAME)
         from unsloth import FastLanguageModel
-        # IMPORTANT: Unsloth's GRPO + bnb-4bit + LoRA fast kernels are only
-        # numerically consistent with fp16 (bnb 4-bit dequant compute_dtype is
-        # fp16; bf16 here causes "self and mat2 must have the same dtype" inside
-        # matmul_lora because the dequant `out` buffer is Half while the LoRA
-        # branch becomes BFloat16 under autocast). Forcing fp16 here makes
-        # base / LoRA / activations all fp16 natively.
-        _unsloth_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        # Unsloth 2026.4.8 on A100 runs in BF16 internally regardless of the
+        # dtype hint. Using fp16 in TrainingArguments activates GradScaler which
+        # then crashes when it finds BF16 gradients ("Attempting to unscale FP16
+        # gradients"). Use BF16 throughout when supported; fall back to FP16 only
+        # on older hardware that lacks BF16.
+        _bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        _unsloth_dtype = (torch.bfloat16 if _bf16_supported
+                         else torch.float16 if torch.cuda.is_available()
+                         else torch.float32)
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name           = MODEL_NAME,
             max_seq_length       = 4096,
@@ -512,8 +514,8 @@ def _run_small_warm_start(model, tokenizer, prompt_state):
         logging_steps=1,
         save_strategy="no",
         remove_unused_columns=False,
-        bf16=False,
-        fp16=torch.cuda.is_available(),
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
         report_to="wandb" if wandb_enabled else "none",
     )
     trainer = Trainer(model=model, args=args, train_dataset=dataset)
@@ -625,15 +627,15 @@ def train():
             from peft import PeftModel
             if not hasattr(model, "peft_config"):
                 model = PeftModel.from_pretrained(model, warm_start_path)
-            # Coerce LoRA adapter dtype to fp16 to match the bnb-4bit base
-            # compute dtype. bnb-4bit base weights are unaffected by .to();
-            # only the (small) LoRA adapters get cast. Prevents the
-            # "self and mat2 must have the same dtype" crash inside Unsloth's
-            # fast_lora kernels.
+            # Coerce LoRA adapter dtype to match the model's compute dtype.
+            # bnb-4bit base weights are unaffected by .to(); only the (small)
+            # LoRA adapters get cast. Prevents "self and mat2 must have the
+            # same dtype" inside Unsloth's fast_lora kernels.
             if torch.cuda.is_available():
+                _target_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
                 for name, param in model.named_parameters():
-                    if "lora_" in name and param.dtype != torch.float16:
-                        param.data = param.data.to(torch.float16)
+                    if "lora_" in name and param.dtype != _target_dtype:
+                        param.data = param.data.to(_target_dtype)
             logger.info("Loaded warm-start LoRA from %s", warm_start_path)
         except Exception as exc:
             logger.warning("Could not reload warm-start LoRA: %s (continuing with base model)", exc)
@@ -661,8 +663,8 @@ def train():
         save_steps                  = 25,
         save_total_limit            = 4,
         dataloader_num_workers      = 0,
-        bf16                        = False,
-        fp16                        = torch.cuda.is_available(),
+        bf16                        = torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        fp16                        = torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
     )
