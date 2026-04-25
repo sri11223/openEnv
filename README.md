@@ -217,6 +217,8 @@ Latest hackathon additions:
 - Native OpenEnv adapter: `server/openenv_native.py` wraps SENTINEL with OpenEnv's `Environment` base class and mounts at `/openenv` when OpenEnv dependencies are installed.
 - Training pipeline: `train.py` supports HF TRL GRPO, Qwen3-4B QLoRA, optional Unsloth, adaptive curriculum, KL guardrails, and proof-pack metrics.
 - Colab runner: [`notebooks/sentinel_qwen3_4b_grpo_colab.ipynb`](notebooks/sentinel_qwen3_4b_grpo_colab.ipynb) gives judges a rerunnable HF TRL/Unsloth training path.
+- **Deep evaluation notebook**: [`notebooks/sentinel_deep_eval.ipynb`](notebooks/sentinel_deep_eval.ipynb) — 7-section before/after SENTINEL comparison, per-worker trust evolution, misbehavior detection breakdown by type, Digital Twin counterfactual damage gap, worker rehabilitation rates, all-4-task comparison, and master summary table. Designed to run end-to-end on Kaggle/Colab.
+- **Live demo script**: `python scripts/demo_sentinel.py [--task adversarial_worker] [--seed 0] [--agent rule|trained]` — colorised step-by-step episode playback with TP/FP/FN badges, counterfactual risk, and episode grader output. No GPU required in rule mode.
 - Judge plot pack: `scripts/render_training_dashboard.py` exports 18 dashboard images covering reward, detection, scenario coverage, tripwires, Top-1 vs Best-of-K, KL drift, memory growth, and zero-gradient GRPO groups.
 - Memory proof: `scripts/run_memory_ablation.py` compares memory-off vs memory-on short runs so we can show that SENTINEL learns from its own oversight mistakes.
 - Training monitor upgrade: structured mistake cards, scenario coverage, and uninformative-batch detection are now logged in `outputs/monitoring/`.
