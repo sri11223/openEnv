@@ -615,8 +615,8 @@ def train():
     grpo_config = GRPOConfig(
         output_dir                  = OUTPUT_DIR,
         num_train_epochs            = 1,
-        per_device_train_batch_size = 1,
-        gradient_accumulation_steps = max(1, 8 // NUM_GENERATIONS),
+        per_device_train_batch_size = NUM_GENERATIONS,
+        gradient_accumulation_steps = 1,
         num_generations             = NUM_GENERATIONS,
         max_completion_length       = MAX_NEW_TOKENS,
         learning_rate               = LR,
