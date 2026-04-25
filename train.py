@@ -121,7 +121,9 @@ LORA_R          = int(os.getenv("LORA_R", "16"))
 MAX_NEW_TOKENS  = int(os.getenv("MAX_NEW_TOKENS", "512"))
 PROMPT_DATASET_SIZE = int(os.getenv("PROMPT_DATASET_SIZE", str(max(512, TRAIN_STEPS * 8))))
 USE_LLM_PANEL   = bool(GROQ_API_KEY)                  # auto-enable if key available
-USE_CURRICULUM  = True
+USE_CURRICULUM  = os.getenv("USE_CURRICULUM", "1") == "1"
+GEN_TEMPERATURE = float(os.getenv("GEN_TEMPERATURE", "0.7"))
+GEN_TOP_P       = float(os.getenv("GEN_TOP_P", "1.0"))
 USE_SENTINEL    = os.getenv("USE_SENTINEL", "0") == "1"  # Enable SENTINEL training
 USE_AGENT_MEMORY = os.getenv("USE_AGENT_MEMORY", "1") == "1"
 USE_FEEDBACK_MEMORY = os.getenv("USE_FEEDBACK_MEMORY", "1") == "1" and USE_AGENT_MEMORY
@@ -515,6 +517,9 @@ def train():
     logger.info("LoRA r:     %d", LORA_R)
     logger.info("LLM panel:  %s", USE_LLM_PANEL)
     logger.info("Curriculum: %s", USE_CURRICULUM)
+    logger.info("Sampling:   temperature=%.2f top_p=%.2f", GEN_TEMPERATURE, GEN_TOP_P)
+    logger.info("Episode:    MODEL_STEPS_LIMIT=%d  MAX_NEW_TOKENS=%d", MODEL_STEPS_LIMIT, MAX_NEW_TOKENS)
+    logger.info("EvalMinDif: %s", os.getenv("EVAL_MIN_DIFFICULTY", "0.0"))
     logger.info("Warm start: %s", WARM_START_STEPS if WARM_START_STEPS > 0 else "disabled")
     logger.info("Reward schedule: %s", REWARD_SCHEDULE_MODE if USE_SENTINEL else "n/a")
     logger.info(
@@ -621,7 +626,8 @@ def train():
         max_completion_length       = MAX_NEW_TOKENS,
         learning_rate               = LR,
         beta                        = KL_COEF,
-        temperature                 = 0.7,
+        temperature                 = GEN_TEMPERATURE,
+        top_p                       = GEN_TOP_P,
         logging_steps               = 1,
         save_steps                  = 25,
         save_total_limit            = 4,

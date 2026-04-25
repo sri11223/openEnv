@@ -69,9 +69,9 @@ DIFFICULTY_TIERS = [
     {"name": "expert", "max_diff": 1.00, "min_episodes": 0, "advance_rate": 1.00},
 ]
 
-MASTERY_THRESHOLD = 0.70
-MASTERY_WINDOW = 10
-MIN_EPISODES_FOR_MASTERY = 3
+MASTERY_THRESHOLD = float(os.getenv("MASTERY_THRESHOLD", "0.70"))
+MASTERY_WINDOW = int(os.getenv("MASTERY_WINDOW", "10"))
+MIN_EPISODES_FOR_MASTERY = int(os.getenv("MIN_EPISODES_FOR_MASTERY", "3"))
 CURRICULUM_DIFFICULTY_WINDOW = max(1, int(os.getenv("CURRICULUM_DIFFICULTY_WINDOW", "2")))
 CURRICULUM_FRONTIER_MIN_ATTEMPTS = max(1, int(os.getenv("CURRICULUM_FRONTIER_MIN_ATTEMPTS", "3")))
 CURRICULUM_FRONTIER_TARGET_RATE = float(os.getenv("CURRICULUM_FRONTIER_TARGET_RATE", "0.75"))
@@ -347,13 +347,21 @@ class CurriculumController:
         return not self._active_task_ids or task_id in self._active_task_ids
 
     def _ensure_adaptive_state(self) -> None:
+        # When CURRICULUM_OPEN_WINDOW=1, force the per-task difficulty window
+        # to span ALL available ranks. Use this to break out of the
+        # "stuck at seed 0" trap when mastery threshold is never reached.
+        open_window = os.getenv("CURRICULUM_OPEN_WINDOW", "0") == "1"
         for task_id in self._active_task_ids:
             task_scenarios = TASK_SCENARIOS_BY_DIFFICULTY.get(task_id, [])
             max_rank = max(0, len(task_scenarios) - 1)
-            low = int(self._state.difficulty_low.get(task_id, 0))
-            high = int(self._state.difficulty_high.get(task_id, 0))
-            low = max(0, min(low, max_rank))
-            high = max(low, min(high, max_rank))
+            if open_window:
+                low = 0
+                high = max_rank
+            else:
+                low = int(self._state.difficulty_low.get(task_id, 0))
+                high = int(self._state.difficulty_high.get(task_id, 0))
+                low = max(0, min(low, max_rank))
+                high = max(low, min(high, max_rank))
             self._state.difficulty_low[task_id] = low
             self._state.difficulty_high[task_id] = high
             self._state.mastery_attempts[task_id] = max(0, int(self._state.mastery_attempts.get(task_id, 0)))
