@@ -110,8 +110,8 @@ MODEL_NAME      = os.getenv("MODEL_NAME", "unsloth/Qwen3-30B-A3B-bnb-4bit")
 HF_TOKEN        = os.getenv("HF_TOKEN", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 WANDB_PROJECT   = os.getenv("WANDB_PROJECT", "").strip()
-TRAIN_STEPS     = int(os.getenv("TRAIN_STEPS", "200"))
-NUM_GENERATIONS = int(os.getenv("NUM_GENERATIONS", "4"))
+TRAIN_STEPS     = int(os.getenv("TRAIN_STEPS", "100"))
+NUM_GENERATIONS = int(os.getenv("NUM_GENERATIONS", "2"))
 USE_UNSLOTH     = os.getenv("USE_UNSLOTH", "1") == "1"
 RESUME_FROM     = os.getenv("RESUME_FROM", "")
 OUTPUT_DIR      = os.getenv("OUTPUT_DIR", "outputs/checkpoints")
@@ -621,6 +621,7 @@ def train():
         max_completion_length       = MAX_NEW_TOKENS,
         learning_rate               = LR,
         beta                        = KL_COEF,
+        temperature                 = 0.7,
         logging_steps               = 1,
         save_steps                  = 25,
         save_total_limit            = 4,
@@ -629,6 +630,7 @@ def train():
         fp16                        = torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
+        chat_template_kwargs        = {"enable_thinking": False},
     )
 
 
