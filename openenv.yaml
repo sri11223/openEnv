@@ -1,5 +1,6 @@
 name: sentinel-oversight-command
 version: "1.0.0"
+openenv_version: ">=0.3.0"
 description: >
   Multi-agent AI oversight environment for OpenEnv. SENTINEL supervises
   worker agents during production incident response, intercepts proposed

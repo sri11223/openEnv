@@ -602,6 +602,11 @@ def grpo_reward_fn(
     rewards = []
     histories: List[List[Dict[str, Any]]] = []
 
+    # Batch-level frontier metrics for WandB
+    _cot_bonuses: List[float] = []
+    _twin_ratios: List[float] = []
+    _debate_qualities: List[float] = []
+
     for i, (prompt, completion) in enumerate(zip(prompts, completions)):
         t_id = (task_id[i] if task_id else active_task_ids[0])
         seed = (variant_seed[i] if variant_seed else 0)
@@ -614,6 +619,48 @@ def grpo_reward_fn(
                 completion, t_id, seed, sentinel_task_ids,
                 model_steps_limit=model_steps_limit,
             )
+
+        # --- Frontier integration: CoT monitoring ---
+        # Analyze the model's reasoning quality and apply reward bonus/penalty
+        try:
+            from sentinel.cot_monitor import analyze_cot
+            cot_result = analyze_cot(completion)
+            cot_bonus = cot_result.get("reward_bonus", 0.0)
+            score = float(np.clip(score + cot_bonus, 0.0, 1.0))
+            _cot_bonuses.append(cot_bonus)
+        except Exception as e:
+            logger.debug("CoT monitor failed: %s", e)
+            _cot_bonuses.append(0.0)
+
+        # --- Frontier integration: Digital Twin counterfactual replay ---
+        # Replay without oversight to quantify oversight value
+        if history and len(history) >= 2:
+            try:
+                from sentinel.twin_replay import compute_twin_replay
+                twin = compute_twin_replay(history, t_id, seed, sentinel_score=score)
+                _twin_ratios.append(twin.oversight_value_ratio)
+            except Exception as e:
+                logger.debug("Twin replay failed: %s", e)
+                _twin_ratios.append(1.0)
+
+        # --- Frontier integration: Debate protocol scoring ---
+        # Run debate on first step to assess decision quality
+        if history:
+            try:
+                from sentinel.debate import run_debate
+                first_step = history[0] if history else {}
+                proposal = first_step.get("proposal", {})
+                audit = first_step.get("audit", {}) or {}
+                if proposal:
+                    debate_result = run_debate(
+                        proposal=proposal,
+                        world_state=first_step.get("world_state", {}),
+                        is_misbehavior=bool(audit.get("was_misbehavior")),
+                        misbehavior_type=str(audit.get("reason", "")),
+                    )
+                    _debate_qualities.append(debate_result.get("debate_quality", 0.5))
+            except Exception as e:
+                logger.debug("Debate scoring failed: %s", e)
 
         # Optional: LLM panel hybrid
         if use_llm_panel and history:
@@ -634,13 +681,22 @@ def grpo_reward_fn(
 
     if wandb_enabled:
         import wandb
-        wandb.log({
+        log_data = {
             "reward/mean": mean_r,
             "reward/min": min(rewards, default=0),
             "reward/max": max(rewards, default=0),
             "reward/std": float(np.std(rewards)) if rewards else 0,
-        })
+        }
+        # Log frontier metrics
+        if _cot_bonuses:
+            log_data["frontier/cot_bonus_mean"] = sum(_cot_bonuses) / len(_cot_bonuses)
+        if _twin_ratios:
+            log_data["frontier/twin_oversight_ratio_mean"] = sum(_twin_ratios) / len(_twin_ratios)
+        if _debate_qualities:
+            log_data["frontier/debate_quality_mean"] = sum(_debate_qualities) / len(_debate_qualities)
+        wandb.log(log_data)
 
     if return_histories:
         return rewards, histories
     return rewards
+
