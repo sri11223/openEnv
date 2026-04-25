@@ -52,6 +52,17 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset as TorchDataset
+
+# bnb-4bit pre-quantized models have compute_dtype=float16 baked in, so LoRA
+# adapter parameters and their gradients are FP16. PyTorch 2.10 added a strict
+# check in GradScaler._unscale_grads_ that rejects FP16 gradients (intended for
+# full-precision training where FP16 grads indicate a misconfiguration). For
+# bnb-4bit + LoRA this check is a false positive — patch it out.
+import torch.amp.grad_scaler as _gs
+_orig_unscale_grads = _gs.GradScaler._unscale_grads_
+def _allow_fp16_unscale(self, optimizer, inv_scale, found_inf, allow_fp16):
+    return _orig_unscale_grads(self, optimizer, inv_scale, found_inf, True)
+_gs.GradScaler._unscale_grads_ = _allow_fp16_unscale
 from transformers import TrainerCallback
 
 # Re-export from extracted modules for backward compatibility
@@ -306,15 +317,12 @@ def load_model_and_tokenizer():
     if USE_UNSLOTH:
         logger.info("Loading model with Unsloth: %s", MODEL_NAME)
         from unsloth import FastLanguageModel
-        # Unsloth 2026.4.8 on A100 runs in BF16 internally regardless of the
-        # dtype hint. Using fp16 in TrainingArguments activates GradScaler which
-        # then crashes when it finds BF16 gradients ("Attempting to unscale FP16
-        # gradients"). Use BF16 throughout when supported; fall back to FP16 only
-        # on older hardware that lacks BF16.
-        _bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        _unsloth_dtype = (torch.bfloat16 if _bf16_supported
-                         else torch.float16 if torch.cuda.is_available()
-                         else torch.float32)
+        # IMPORTANT: keep dtype=float16 for bnb-4bit. The pre-quantized
+        # unsloth/*-bnb-4bit models have compute_dtype=float16 baked into their
+        # quantization config. Unsloth's fast_lora kernels use X.dtype as the
+        # target dtype for LoRA ops; if X is BF16 but bnb dequant output is FP16
+        # the addmm_ inside matmul_lora crashes with "same dtype" error.
+        _unsloth_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name           = MODEL_NAME,
             max_seq_length       = 4096,
@@ -514,8 +522,8 @@ def _run_small_warm_start(model, tokenizer, prompt_state):
         logging_steps=1,
         save_strategy="no",
         remove_unused_columns=False,
-        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        bf16=False,
+        fp16=torch.cuda.is_available(),
         report_to="wandb" if wandb_enabled else "none",
     )
     trainer = Trainer(model=model, args=args, train_dataset=dataset)
@@ -627,15 +635,15 @@ def train():
             from peft import PeftModel
             if not hasattr(model, "peft_config"):
                 model = PeftModel.from_pretrained(model, warm_start_path)
-            # Coerce LoRA adapter dtype to match the model's compute dtype.
-            # bnb-4bit base weights are unaffected by .to(); only the (small)
-            # LoRA adapters get cast. Prevents "self and mat2 must have the
-            # same dtype" inside Unsloth's fast_lora kernels.
+            # Coerce LoRA adapter dtype to fp16 to match the bnb-4bit base
+            # compute dtype. bnb-4bit base weights are unaffected by .to();
+            # only the (small) LoRA adapters get cast. Prevents the
+            # "self and mat2 must have the same dtype" crash inside Unsloth's
+            # fast_lora kernels (which derive target dtype from X.dtype = fp16).
             if torch.cuda.is_available():
-                _target_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
                 for name, param in model.named_parameters():
-                    if "lora_" in name and param.dtype != _target_dtype:
-                        param.data = param.data.to(_target_dtype)
+                    if "lora_" in name and param.dtype != torch.float16:
+                        param.data = param.data.to(torch.float16)
             logger.info("Loaded warm-start LoRA from %s", warm_start_path)
         except Exception as exc:
             logger.warning("Could not reload warm-start LoRA: %s (continuing with base model)", exc)
@@ -663,8 +671,8 @@ def train():
         save_steps                  = 25,
         save_total_limit            = 4,
         dataloader_num_workers      = 0,
-        bf16                        = torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        fp16                        = torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        bf16                        = False,
+        fp16                        = torch.cuda.is_available(),
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
     )
