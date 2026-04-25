@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 def parse_action(text: str) -> Optional[Dict[str, Any]]:
     """Extract JSON action from model completion text."""
     text = text.strip()
+    
+    # Strip <think>...</think> blocks which might contain internal `{}` 
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     # Try full JSON
     try:
