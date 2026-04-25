@@ -592,7 +592,19 @@ def train():
     )
 
     warm_start_summary: Optional[Dict[str, Any]] = None
-    if WARM_START_STEPS > 0:
+    warm_start_path = os.path.join("outputs", "warm_start", "final")
+    if WARM_START_STEPS > 0 and os.path.isdir(warm_start_path):
+        logger.info("Warm-start checkpoint found at %s — SKIPPING (saves ~20 min)", warm_start_path)
+        # Reload the warm-start LoRA weights
+        try:
+            from peft import PeftModel
+            if not hasattr(model, "peft_config"):
+                model = PeftModel.from_pretrained(model, warm_start_path)
+            logger.info("Loaded warm-start LoRA from %s", warm_start_path)
+        except Exception as exc:
+            logger.warning("Could not reload warm-start LoRA: %s (continuing with base model)", exc)
+        warm_start_summary = {"saved_model_path": warm_start_path, "skipped": True}
+    elif WARM_START_STEPS > 0:
         warm_start_summary = _run_small_warm_start(model, tokenizer, prompt_state)
         if WARM_START_ONLY:
             return warm_start_summary["saved_model_path"]
@@ -608,17 +620,17 @@ def train():
         num_generations             = NUM_GENERATIONS,
         max_completion_length       = MAX_NEW_TOKENS,
         learning_rate               = LR,
-        kl_coef                     = KL_COEF,
+        beta                        = KL_COEF,
         logging_steps               = 1,
         save_steps                  = 25,
         save_total_limit            = 4,
-        remove_unused_columns       = False,
         dataloader_num_workers      = 0,
         bf16                        = torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         fp16                        = torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
     )
+
 
 
     # Wrap reward fn to inject curriculum-selected task_ids and seeds
