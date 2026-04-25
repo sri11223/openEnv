@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "steps": 20,
+  "learning_rate": 2e-05,
+  "dataset_size": 24,
+  "output_dir": "outputs/warm_start",
+  "saved_model_path": "outputs/warm_start/final",
+  "task_ids": [
+    "basic_oversight",
+    "fleet_monitoring_conflict",
+    "adversarial_worker",
+    "multi_crisis_command"
+  ]
+}

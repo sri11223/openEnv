@@ -1,0 +1,115 @@
+{
+  "images": [
+    {
+      "file": "01_reward_mean.png",
+      "title": "Reward Mean"
+    },
+    {
+      "file": "02_detection_vs_false_positive.png",
+      "title": "Detection vs False Positive"
+    },
+    {
+      "file": "03_risk_reduction.png",
+      "title": "Counterfactual Risk Reduction"
+    },
+    {
+      "file": "04_worker_rehabilitation.png",
+      "title": "Worker Rehabilitation"
+    },
+    {
+      "file": "05_task_coverage.png",
+      "title": "Task Coverage"
+    },
+    {
+      "file": "06_scenario_coverage_heatmap.png",
+      "title": "Scenario Coverage Heatmap"
+    },
+    {
+      "file": "07_misbehavior_detection.png",
+      "title": "Misbehavior Coverage"
+    },
+    {
+      "file": "08_confusion_matrix.png",
+      "title": "Per-Misbehavior Confusion Matrix"
+    },
+    {
+      "file": "09_curriculum_frontier.png",
+      "title": "Adaptive Curriculum Frontier"
+    },
+    {
+      "file": "10_productive_signal.png",
+      "title": "Productive Signal"
+    },
+    {
+      "file": "11_entropy_diversity.png",
+      "title": "Decision Entropy and Diversity"
+    },
+    {
+      "file": "12_kl_drift_beta.png",
+      "title": "KL Drift and Adaptive Beta"
+    },
+    {
+      "file": "13_tripwire_pass_rate.png",
+      "title": "Tripwire Pass Rate"
+    },
+    {
+      "file": "14_top1_vs_bestofk.png",
+      "title": "Top-1 vs Best-of-K"
+    },
+    {
+      "file": "15_learning_snapshots.png",
+      "title": "Learning Snapshots"
+    },
+    {
+      "file": "16_memory_ablation.png",
+      "title": "Memory Ablation"
+    },
+    {
+      "file": "17_zero_gradient_groups.png",
+      "title": "Zero-Gradient Group Fraction"
+    },
+    {
+      "file": "18_memory_growth.png",
+      "title": "Memory Growth"
+    }
+  ],
+  "inputs": {
+    "eval_report_path": "outputs/evals/sentinel_held_out_report.json",
+    "memory_ablation_path": "outputs/monitoring/memory_ablation.json",
+    "monitor_dir": "/data/sentinel_outputs/monitoring"
+  },
+  "learning_snapshots": [
+    {
+      "batch_index": 10,
+      "detection_rate": 0.5,
+      "effective_prompt_ratio": 0.75,
+      "false_positive_rate": 0.0769,
+      "found": true,
+      "reward_mean": 0.2191,
+      "risk_reduction_rate": 0.4828,
+      "target_batch": 10
+    },
+    {
+      "batch_index": 50,
+      "detection_rate": 0.7143,
+      "effective_prompt_ratio": 0.75,
+      "false_positive_rate": 0.4507,
+      "found": true,
+      "reward_mean": 0.2016,
+      "risk_reduction_rate": 0.7085,
+      "target_batch": 50
+    },
+    {
+      "batch_index": 200,
+      "detection_rate": 0.7826,
+      "effective_prompt_ratio": 1.0,
+      "false_positive_rate": 0.4554,
+      "found": true,
+      "reward_mean": 0.2806,
+      "risk_reduction_rate": 0.7797,
+      "target_batch": 300
+    }
+  ],
+  "records": 255,
+  "stability_records": 255
+}
