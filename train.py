@@ -649,7 +649,6 @@ def train():
         fp16                        = torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
-        chat_template_kwargs        = {"enable_thinking": False},
     )
 
 
