@@ -307,6 +307,10 @@ python scripts/demo_sentinel.py --task basic_oversight --seed 0 --agent rule
 
 Open:
 
+- `http://localhost:7860/` - Hugging Face-style try-it landing page
+- `http://localhost:7860/try` - same try-it landing page
+- `http://localhost:7860/sentinel/dashboard` - full SENTINEL episode dashboard
+- `http://localhost:7860/sentinel/demo` - universal oversight playground
 - `http://localhost:7860/health`
 - `http://localhost:7860/tasks`
 - `http://localhost:7860/web`
@@ -355,6 +359,9 @@ python scripts/rft_polish.py --help
 
 | Endpoint | Purpose |
 |---|---|
+| `GET /` | human try-it landing page |
+| `GET /try` | human try-it landing page |
+| `GET /info` | JSON service info and telemetry |
 | `GET /health` | service health |
 | `GET /tasks` | task metadata |
 | `POST /reset` | reset IRT incident-response task |
@@ -364,6 +371,9 @@ python scripts/rft_polish.py --help
 | `POST /sentinel/step` | step SENTINEL oversight task |
 | `GET /sentinel/state` | current SENTINEL state |
 | `POST /sentinel/grade` | grade a SENTINEL trajectory |
+| `GET /sentinel/dashboard` | full browser episode dashboard |
+| `GET /sentinel/demo` | universal action playground |
+| `POST /sentinel/universal` | test arbitrary agent actions from other domains |
 | `GET /metrics` | runtime metrics |
 | `GET /prometheus/metrics` | Prometheus-style metrics |
 | `/openenv/*` | native OpenEnv adapter routes |

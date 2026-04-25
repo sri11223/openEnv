@@ -22,7 +22,9 @@ Endpoints:
     GET  /render             - Human-readable incident dashboard (requires X-Session-ID)
     GET  /leaderboard        - Top scores per task from completed episodes
     GET  /health             - Standard OpenEnv liveness probe
-    GET  /                   - Rich health check with telemetry
+    GET  /                   - Human landing page for the live demo
+    GET  /try                - Human landing page for trying SENTINEL
+    GET  /info               - Rich JSON service info with telemetry
     WS   /ws                 - WebSocket persistent session (no session header needed)
     GET  /web                - Interactive browser-based incident dashboard
 """
@@ -198,9 +200,8 @@ async def health_check():
     }
 
 
-@app.get("/")
-async def health():
-    """Health check - returns 200 with environment info and live telemetry."""
+def _service_info():
+    """Return environment info and live telemetry for JSON endpoints."""
     return {
         "status": "ok",
         "environment": "sentinel-oversight-command",
@@ -223,6 +224,136 @@ async def health():
         "ws_active_connections": _deps.WS_ACTIVE_CONNECTIONS,
         "telemetry": _TELEMETRY,
     }
+
+
+_TRY_LANDING_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENTINEL Oversight Command</title>
+<style>
+*{box-sizing:border-box}
+:root{--bg:#090b0f;--panel:#121720;--panel2:#0f131a;--line:#273141;--text:#f4f7fb;--muted:#a9b4c2;--green:#54d18a;--red:#ff6b6b;--amber:#f6c85f;--cyan:#72d6ff}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% 0%,#172233 0,#090b0f 36%,#07090c 100%);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:42px 22px 28px}
+.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:26px;align-items:center;margin-bottom:28px}
+.eyebrow{display:inline-flex;border:1px solid #36516b;color:#bfe8ff;background:#0d1722;border-radius:999px;padding:6px 10px;font-size:12px;margin-bottom:16px}
+h1{font-size:54px;line-height:.98;margin:0 0 16px;letter-spacing:0}
+.lead{font-size:18px;line-height:1.55;color:var(--muted);margin:0 0 22px;max-width:760px}
+.actions{display:flex;gap:12px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:#182131;color:var(--text);border-radius:8px;padding:12px 15px;font-weight:700}
+.btn.primary{background:var(--green);border-color:var(--green);color:#07110c}
+.btn:hover{filter:brightness(1.12)}
+.console{background:linear-gradient(180deg,#121923,#0b0f15);border:1px solid var(--line);border-radius:8px;padding:16px;box-shadow:0 18px 60px rgba(0,0,0,.35)}
+.console h2{font-size:13px;text-transform:uppercase;color:var(--muted);letter-spacing:.08em;margin:0 0 12px}
+.step{border-left:3px solid var(--cyan);padding:10px 12px;background:#0c1118;margin:9px 0;border-radius:0 7px 7px 0}
+.step.block{border-color:var(--red)}.step.redirect{border-color:var(--amber)}.step.approve{border-color:var(--green)}
+.k{font-size:12px;color:var(--muted);text-transform:uppercase}.v{margin-top:3px;font-size:14px;line-height:1.35}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:20px 0}
+.card{background:rgba(18,23,32,.92);border:1px solid var(--line);border-radius:8px;padding:18px;min-height:220px}
+.card h3{margin:0 0 8px;font-size:20px}.card p{color:var(--muted);line-height:1.45;margin:0 0 14px}
+.mini{font-size:13px;color:var(--muted);line-height:1.5;margin-top:10px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0 28px}
+.stat{background:#0f141c;border:1px solid var(--line);border-radius:8px;padding:14px}.stat b{display:block;font-size:24px}.stat span{color:var(--muted);font-size:12px}
+.foot{margin-top:24px;color:var(--muted);font-size:13px;line-height:1.5}
+@media(max-width:900px){.hero,.grid,.stats{grid-template-columns:1fr}h1{font-size:40px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <div class="eyebrow">OpenEnv Hackathon &middot; Multi-agent oversight &middot; Live Space</div>
+      <h1>SENTINEL supervises AI workers before they act.</h1>
+      <p class="lead">
+        Try a control-room environment where worker agents propose actions during production incidents.
+        SENTINEL must approve safe work, block hallucinations, redirect risky actions, reassign wrong-domain workers,
+        and preserve an audit trail before anything executes.
+      </p>
+      <div class="actions">
+        <a class="btn primary" href="/sentinel/dashboard">Run full episode</a>
+        <a class="btn" href="/sentinel/demo">Try any agent action</a>
+        <a class="btn" href="/docs">API docs</a>
+        <a class="btn" href="/health">Health JSON</a>
+      </div>
+    </div>
+    <div class="console">
+      <h2>Demo beat</h2>
+      <div class="step">
+        <div class="k">Worker proposal</div>
+        <div class="v">"Restart auth-service now. Confidence 0.99."</div>
+      </div>
+      <div class="step block">
+        <div class="k">SENTINEL check</div>
+        <div class="v">No investigation, high blast radius, prior over-escalation pattern.</div>
+      </div>
+      <div class="step redirect">
+        <div class="k">Decision</div>
+        <div class="v">REDIRECT: inspect deployment timeline and error-rate metrics first.</div>
+      </div>
+      <div class="step approve">
+        <div class="k">Proof</div>
+        <div class="v">Trust, reward, counterfactual damage, and audit log update after the step.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="stat"><b>7</b><span>OpenEnv tasks</span></div>
+    <div class="stat"><b>4</b><span>worker-agent roles</span></div>
+    <div class="stat"><b>200</b><span>Phase 1 GRPO steps</span></div>
+    <div class="stat"><b>18</b><span>proof dashboard plots</span></div>
+  </section>
+
+  <section class="grid">
+    <a class="card" href="/sentinel/dashboard">
+      <h3>Full Episode Dashboard</h3>
+      <p>Run the real SENTINEL environment end to end: choose a task, inspect the worker proposal, make decisions, step the environment, and grade the episode.</p>
+      <div class="mini">Best for showing the full OpenEnv loop: reset &rarr; observe &rarr; decide &rarr; step &rarr; reward &rarr; audit.</div>
+    </a>
+    <a class="card" href="/sentinel/demo">
+      <h3>Universal Oversight Playground</h3>
+      <p>Paste any agent action from infrastructure, healthcare, finance, or generic workflows and see SENTINEL's constitutional and counterfactual analysis.</p>
+      <div class="mini">Best for quickly testing hallucination, prompt injection, destructive action, and missing-evidence cases.</div>
+    </a>
+    <a class="card" href="/openenv/tasks">
+      <h3>OpenEnv API</h3>
+      <p>Use the native OpenEnv routes for programmatic evaluation. The API remains available for judges, trainers, and automated clients.</p>
+      <div class="mini">Also available: /tasks, /sentinel/reset, /sentinel/step, /metrics, /mcp, and A2A discovery.</div>
+    </a>
+  </section>
+
+  <p class="foot">
+    The live UI uses the deterministic SENTINEL verifier/gate so it runs reliably on the Space.
+    The trained LoRA model is published at
+    <a href="https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo">srikrish2004/sentinel-qwen3-4b-grpo</a>
+    and the proof pack is in the GitHub repository.
+  </p>
+</main>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def landing_page():
+    """Human landing page for Hugging Face Spaces."""
+    return HTMLResponse(_TRY_LANDING_HTML)
+
+
+@app.get("/try", response_class=HTMLResponse)
+async def try_page():
+    """Alias for the human landing page."""
+    return HTMLResponse(_TRY_LANDING_HTML)
+
+
+@app.get("/info")
+async def info():
+    """JSON service information and live telemetry."""
+    return _service_info()
 
 
 # ---------------------------------------------------------------------------
