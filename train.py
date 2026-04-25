@@ -495,7 +495,20 @@ def _run_small_warm_start(model, tokenizer, prompt_state):
     preview = [{"task_id": r["task_id"], "variant_seed": r["variant_seed"], "text_preview": str(r["text"])[:240]} for r in examples[:5]]
     (output_dir / "dataset_preview.json").write_text(json.dumps(preview, indent=2), encoding="utf-8")
     dataset = WarmStartDataset([r["text"] for r in examples], tokenizer)
-    args = TrainingArguments(output_dir=str(output_dir), overwrite_output_dir=True, per_device_train_batch_size=1, gradient_accumulation_steps=4, learning_rate=WARM_START_LR, max_steps=max(1, WARM_START_STEPS), num_train_epochs=1, logging_steps=1, save_strategy="no", remove_unused_columns=False, bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(), fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(), report_to="wandb" if wandb_enabled else "none")
+    args = TrainingArguments(
+        output_dir=str(output_dir),
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        learning_rate=WARM_START_LR,
+        max_steps=max(1, WARM_START_STEPS),
+        num_train_epochs=1,
+        logging_steps=1,
+        save_strategy="no",
+        remove_unused_columns=False,
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        report_to="wandb" if wandb_enabled else "none",
+    )
     trainer = Trainer(model=model, args=args, train_dataset=dataset)
     trainer.train()
     final_dir = output_dir / "final"
@@ -597,7 +610,7 @@ def train():
     )
 
     warm_start_summary: Optional[Dict[str, Any]] = None
-    warm_start_path = os.path.join("outputs", "warm_start", "final")
+    warm_start_path = os.path.join(WARM_START_OUTPUT_DIR, "final")
     if WARM_START_STEPS > 0 and os.path.isdir(warm_start_path):
         logger.info("Warm-start checkpoint found at %s — SKIPPING (saves ~20 min)", warm_start_path)
         # Reload the warm-start LoRA weights
