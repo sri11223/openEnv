@@ -6,7 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=7860 \
-    ENABLE_WEB_INTERFACE=true
+    ENABLE_WEB_INTERFACE=true \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache
 
 WORKDIR /app
 
@@ -14,14 +16,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
-COPY . .
+# Copy application source as a numeric non-root owner. This avoids a fragile
+# useradd/chown build layer on Hugging Face Spaces while still avoiding root.
+COPY --chown=1000:1000 . .
 
-# Create a dedicated non-root user for security
-RUN useradd -m -u 1000 -s /sbin/nologin appuser \
-    && chown -R appuser:appuser /app
-
-USER appuser
+USER 1000
 
 # HF Spaces requires port 7860
 EXPOSE 7860
