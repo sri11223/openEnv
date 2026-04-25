@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1550" height="760" viewBox="0 0 1550 760" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL protocol and serving architecture</title>
+  <desc id="desc">SENTINEL serving diagram showing clients, Hugging Face Space, Docker, FastAPI, OpenEnv routes, MCP server, A2A server, and the core SENTINEL environment.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="13" markerHeight="10" refX="11" refY="5" orient="auto">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 33px Arial,sans-serif;fill:#111827}
+      .label{font:700 16px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .box{stroke:#334155;stroke-width:2;rx:12;ry:12}
+      .outer{stroke:#94a3b8;stroke-width:1.6;rx:18;ry:18;fill:#ffffff}
+      .arrow{stroke:#334155;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1550" height="760" fill="#f8fafc"/>
+  <text x="55" y="58" class="title">Protocol + Serving Layer: OpenEnv, HTTP, MCP, A2A, Docker, HF Space</text>
+  <text x="55" y="90" class="small">SENTINEL is not only a notebook. The same core environment is exposed through multiple agent and evaluation protocols.</text>
+
+  <rect x="55" y="145" width="250" height="120" class="box" fill="#dbeafe"/>
+  <text x="180" y="180" text-anchor="middle" class="label">External Users</text>
+  <text x="180" y="210" text-anchor="middle" class="small">OpenEnv evaluator</text>
+  <text x="180" y="232" text-anchor="middle" class="small">agent clients</text>
+  <text x="180" y="254" text-anchor="middle" class="small">demo/browser/API calls</text>
+
+  <rect x="55" y="335" width="250" height="120" class="box" fill="#e0f2fe"/>
+  <text x="180" y="370" text-anchor="middle" class="label">Deployment Shell</text>
+  <text x="180" y="400" text-anchor="middle" class="small">Dockerfile</text>
+  <text x="180" y="422" text-anchor="middle" class="small">Hugging Face Space</text>
+  <text x="180" y="444" text-anchor="middle" class="small">openenv.yaml metadata</text>
+
+  <rect x="380" y="105" width="360" height="555" class="outer"/>
+  <text x="560" y="140" text-anchor="middle" class="label">Server Boundary</text>
+  <rect x="420" y="180" width="280" height="82" class="box" fill="#fef3c7"/>
+  <text x="560" y="212" text-anchor="middle" class="label">FastAPI app</text>
+  <text x="560" y="238" text-anchor="middle" class="small">app.py / health / dashboard</text>
+  <rect x="420" y="305" width="280" height="82" class="box" fill="#dcfce7"/>
+  <text x="560" y="337" text-anchor="middle" class="label">Native OpenEnv routes</text>
+  <text x="560" y="363" text-anchor="middle" class="small">/openenv/reset / step / state</text>
+  <rect x="420" y="430" width="280" height="82" class="box" fill="#ede9fe"/>
+  <text x="560" y="462" text-anchor="middle" class="label">MCP server</text>
+  <text x="560" y="488" text-anchor="middle" class="small">server/mcp_server.py tools</text>
+  <rect x="420" y="555" width="280" height="82" class="box" fill="#fce7f3"/>
+  <text x="560" y="587" text-anchor="middle" class="label">A2A protocol server</text>
+  <text x="560" y="613" text-anchor="middle" class="small">server/a2a_server.py agent card</text>
+
+  <rect x="830" y="210" width="300" height="160" class="box" fill="#fee2e2"/>
+  <text x="980" y="248" text-anchor="middle" class="label">Universal Adapter</text>
+  <text x="980" y="280" text-anchor="middle" class="small">normalizes protocol calls</text>
+  <text x="980" y="305" text-anchor="middle" class="small">into reset / step / state</text>
+  <text x="980" y="330" text-anchor="middle" class="small">and structured observations</text>
+
+  <rect x="1210" y="190" width="260" height="210" class="box" fill="#ecfccb"/>
+  <text x="1340" y="232" text-anchor="middle" class="label">Core SENTINEL Env</text>
+  <text x="1340" y="264" text-anchor="middle" class="small">sentinel/environment.py</text>
+  <text x="1340" y="289" text-anchor="middle" class="small">workers + trust + memory</text>
+  <text x="1340" y="314" text-anchor="middle" class="small">constitution + reward</text>
+  <text x="1340" y="339" text-anchor="middle" class="small">multi-crisis command</text>
+
+  <rect x="1210" y="480" width="260" height="120" class="box" fill="#e0e7ff"/>
+  <text x="1340" y="518" text-anchor="middle" class="label">Artifacts</text>
+  <text x="1340" y="548" text-anchor="middle" class="small">audit logs, metrics</text>
+  <text x="1340" y="572" text-anchor="middle" class="small">proof pack, dashboard</text>
+
+  <path class="arrow" d="M305 205 H415"/>
+  <path class="arrow" d="M305 395 C350 395,365 346,415 346"/>
+  <path class="arrow" d="M700 221 H825"/>
+  <path class="arrow" d="M700 346 H825"/>
+  <path class="arrow" d="M700 471 H825"/>
+  <path class="arrow" d="M700 596 C790 596,790 345,825 345"/>
+  <path class="arrow" d="M1130 290 H1205"/>
+  <path class="arrow" d="M1340 400 V475"/>
+</svg>

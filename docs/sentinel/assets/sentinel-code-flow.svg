@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="980" viewBox="0 0 1700 980" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL actual code flow</title>
+  <desc id="desc">A module-level diagram showing how SENTINEL code flows from environment reset through worker proposals, context, policy, gate, reward, monitoring, training, evaluation, and proof pack.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="13" markerHeight="10" refX="11" refY="5" orient="auto">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 34px Arial,sans-serif;fill:#111827}
+      .lane{font:700 18px Arial,sans-serif;fill:#0f172a}
+      .label{font:700 15px Arial,sans-serif;fill:#111827}
+      .small{font:12.5px Arial,sans-serif;fill:#334155}
+      .box{stroke:#334155;stroke-width:1.8;rx:10;ry:10}
+      .laneBox{stroke:#94a3b8;stroke-width:1.5;rx:18;ry:18;fill:#ffffff}
+      .arrow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .optional{stroke:#7c3aed;stroke-width:2;fill:none;marker-end:url(#arrow);stroke-dasharray:7 5}
+    </style>
+  </defs>
+  <rect width="1700" height="980" fill="#f8fafc"/>
+  <text x="55" y="58" class="title">Actual Repo Code Flow: Proposal → Context → Gate → Reward → Training Proof</text>
+  <text x="55" y="88" class="small">This diagram maps the architecture to real files, so reviewers can understand what code owns each step.</text>
+
+  <rect x="45" y="125" width="235" height="740" class="laneBox"/>
+  <text x="70" y="158" class="lane">1. World</text>
+  <rect x="70" y="190" width="185" height="74" class="box" fill="#dbeafe"/>
+  <text x="162" y="218" text-anchor="middle" class="label">src/tasks.py</text>
+  <text x="162" y="241" text-anchor="middle" class="small">task definitions</text>
+  <rect x="70" y="305" width="185" height="74" class="box" fill="#dbeafe"/>
+  <text x="162" y="333" text-anchor="middle" class="label">src/env.py</text>
+  <text x="162" y="356" text-anchor="middle" class="small">base incident env</text>
+  <rect x="70" y="420" width="185" height="92" class="box" fill="#dbeafe"/>
+  <text x="162" y="448" text-anchor="middle" class="label">sentinel/environment.py</text>
+  <text x="162" y="471" text-anchor="middle" class="small">SENTINEL wrapper</text>
+  <text x="162" y="492" text-anchor="middle" class="small">multi-crisis logic</text>
+
+  <rect x="315" y="125" width="235" height="740" class="laneBox"/>
+  <text x="340" y="158" class="lane">2. Workers</text>
+  <rect x="340" y="190" width="185" height="84" class="box" fill="#e0f2fe"/>
+  <text x="432" y="217" text-anchor="middle" class="label">sentinel/workers.py</text>
+  <text x="432" y="240" text-anchor="middle" class="small">deterministic schedules</text>
+  <text x="432" y="260" text-anchor="middle" class="small">misbehavior injection</text>
+  <rect x="340" y="320" width="185" height="84" class="box" fill="#ede9fe"/>
+  <text x="432" y="347" text-anchor="middle" class="label">sentinel/llm_workers.py</text>
+  <text x="432" y="370" text-anchor="middle" class="small">Groq workers</text>
+  <text x="432" y="390" text-anchor="middle" class="small">circuit breaker</text>
+  <rect x="340" y="450" width="185" height="84" class="box" fill="#fef3c7"/>
+  <text x="432" y="477" text-anchor="middle" class="label">training/adversarial.py</text>
+  <text x="432" y="500" text-anchor="middle" class="small">tripwire cases</text>
+  <text x="432" y="520" text-anchor="middle" class="small">adversarial proposals</text>
+  <rect x="340" y="590" width="185" height="104" class="box" fill="#fff7ed"/>
+  <text x="432" y="618" text-anchor="middle" class="label">WorkerProposal</text>
+  <text x="432" y="641" text-anchor="middle" class="small">worker_id</text>
+  <text x="432" y="661" text-anchor="middle" class="small">action + target</text>
+  <text x="432" y="681" text-anchor="middle" class="small">reasoning + incident_id</text>
+
+  <rect x="585" y="125" width="235" height="740" class="laneBox"/>
+  <text x="610" y="158" class="lane">3. Context</text>
+  <rect x="610" y="190" width="185" height="74" class="box" fill="#dcfce7"/>
+  <text x="702" y="218" text-anchor="middle" class="label">sentinel/trust.py</text>
+  <text x="702" y="241" text-anchor="middle" class="small">trust tier + evidence mode</text>
+  <rect x="610" y="305" width="185" height="84" class="box" fill="#dcfce7"/>
+  <text x="702" y="333" text-anchor="middle" class="label">sentinel/constitution.py</text>
+  <text x="702" y="356" text-anchor="middle" class="small">P1-P5 scoring</text>
+  <text x="702" y="376" text-anchor="middle" class="small">blast/evidence/domain</text>
+  <rect x="610" y="430" width="185" height="84" class="box" fill="#dcfce7"/>
+  <text x="702" y="458" text-anchor="middle" class="label">training/memory.py</text>
+  <text x="702" y="481" text-anchor="middle" class="small">global memory</text>
+  <text x="702" y="501" text-anchor="middle" class="small">worker mistake cards</text>
+  <rect x="610" y="590" width="185" height="104" class="box" fill="#ecfccb"/>
+  <text x="702" y="618" text-anchor="middle" class="label">Observation Bundle</text>
+  <text x="702" y="641" text-anchor="middle" class="small">state + proposal</text>
+  <text x="702" y="661" text-anchor="middle" class="small">trust + constitution</text>
+  <text x="702" y="681" text-anchor="middle" class="small">memory context</text>
+
+  <rect x="855" y="125" width="235" height="740" class="laneBox"/>
+  <text x="880" y="158" class="lane">4. Policy</text>
+  <rect x="880" y="190" width="185" height="74" class="box" fill="#fce7f3"/>
+  <text x="972" y="218" text-anchor="middle" class="label">training/prompts.py</text>
+  <text x="972" y="241" text-anchor="middle" class="small">prompt + memory injection</text>
+  <rect x="880" y="315" width="185" height="84" class="box" fill="#fce7f3"/>
+  <text x="972" y="343" text-anchor="middle" class="label">Qwen3 LoRA policy</text>
+  <text x="972" y="366" text-anchor="middle" class="small">GRPO-trained</text>
+  <text x="972" y="386" text-anchor="middle" class="small">supervisor model</text>
+  <rect x="880" y="450" width="185" height="84" class="box" fill="#fce7f3"/>
+  <text x="972" y="478" text-anchor="middle" class="label">sentinel/models.py</text>
+  <text x="972" y="501" text-anchor="middle" class="small">structured parser</text>
+  <text x="972" y="521" text-anchor="middle" class="small">OversightDecision</text>
+  <rect x="880" y="590" width="185" height="104" class="box" fill="#fdf2f8"/>
+  <text x="972" y="618" text-anchor="middle" class="label">Decision</text>
+  <text x="972" y="641" text-anchor="middle" class="small">approve / block</text>
+  <text x="972" y="661" text-anchor="middle" class="small">redirect / reassign</text>
+  <text x="972" y="681" text-anchor="middle" class="small">flag</text>
+
+  <rect x="1125" y="125" width="235" height="740" class="laneBox"/>
+  <text x="1150" y="158" class="lane">5. Gate + Reward</text>
+  <rect x="1150" y="190" width="185" height="84" class="box" fill="#fee2e2"/>
+  <text x="1242" y="218" text-anchor="middle" class="label">trust gate</text>
+  <text x="1242" y="241" text-anchor="middle" class="small">auto-block low trust</text>
+  <text x="1242" y="261" text-anchor="middle" class="small">with weak evidence</text>
+  <rect x="1150" y="315" width="185" height="84" class="box" fill="#fee2e2"/>
+  <text x="1242" y="343" text-anchor="middle" class="label">sentinel/feedback.py</text>
+  <text x="1242" y="366" text-anchor="middle" class="small">why blocked</text>
+  <text x="1242" y="386" text-anchor="middle" class="small">suggested fix</text>
+  <rect x="1150" y="450" width="185" height="84" class="box" fill="#fee2e2"/>
+  <text x="1242" y="478" text-anchor="middle" class="label">environment step</text>
+  <text x="1242" y="501" text-anchor="middle" class="small">only safe/corrected</text>
+  <text x="1242" y="521" text-anchor="middle" class="small">action changes world</text>
+  <rect x="1150" y="590" width="185" height="104" class="box" fill="#ffe4e6"/>
+  <text x="1242" y="618" text-anchor="middle" class="label">sentinel/rewards.py</text>
+  <text x="1242" y="641" text-anchor="middle" class="small">TP, FP, FN</text>
+  <text x="1242" y="661" text-anchor="middle" class="small">damage, audit</text>
+  <text x="1242" y="681" text-anchor="middle" class="small">coaching, rehab</text>
+
+  <rect x="1395" y="125" width="250" height="740" class="laneBox"/>
+  <text x="1420" y="158" class="lane">6. Train + Proof</text>
+  <rect x="1420" y="190" width="200" height="84" class="box" fill="#e0e7ff"/>
+  <text x="1520" y="218" text-anchor="middle" class="label">training/monitoring.py</text>
+  <text x="1520" y="241" text-anchor="middle" class="small">coverage, entropy, KL</text>
+  <text x="1520" y="261" text-anchor="middle" class="small">zero-gradient groups</text>
+  <rect x="1420" y="315" width="200" height="84" class="box" fill="#e0e7ff"/>
+  <text x="1520" y="343" text-anchor="middle" class="label">train.py</text>
+  <text x="1520" y="366" text-anchor="middle" class="small">TRL GRPO</text>
+  <text x="1520" y="386" text-anchor="middle" class="small">Unsloth + LoRA</text>
+  <rect x="1420" y="450" width="200" height="84" class="box" fill="#e0e7ff"/>
+  <text x="1520" y="478" text-anchor="middle" class="label">scripts/eval_sentinel.py</text>
+  <text x="1520" y="501" text-anchor="middle" class="small">held-out + OOD</text>
+  <text x="1520" y="521" text-anchor="middle" class="small">Top-1 vs Best-of-K</text>
+  <rect x="1420" y="590" width="200" height="104" class="box" fill="#eef2ff"/>
+  <text x="1520" y="618" text-anchor="middle" class="label">proof_pack.py</text>
+  <text x="1520" y="641" text-anchor="middle" class="small">18 proof images</text>
+  <text x="1520" y="661" text-anchor="middle" class="small">rollout audits</text>
+  <text x="1520" y="681" text-anchor="middle" class="small">dashboard story</text>
+
+  <path class="arrow" d="M162 264 V300"/>
+  <path class="arrow" d="M162 379 V415"/>
+  <path class="arrow" d="M255 466 H335"/>
+  <path class="optional" d="M525 362 C570 360,570 618,605 642"/>
+  <path class="optional" d="M525 492 C570 492,570 622,605 642"/>
+  <path class="arrow" d="M525 642 H605"/>
+  <path class="arrow" d="M795 642 H875"/>
+  <path class="arrow" d="M972 264 V310"/>
+  <path class="arrow" d="M972 399 V445"/>
+  <path class="arrow" d="M972 534 V585"/>
+  <path class="arrow" d="M1065 642 H1145"/>
+  <path class="arrow" d="M1242 274 V310"/>
+  <path class="arrow" d="M1242 399 V445"/>
+  <path class="arrow" d="M1242 534 V585"/>
+  <path class="arrow" d="M1335 642 H1415"/>
+  <path class="arrow" d="M1520 274 V310"/>
+  <path class="arrow" d="M1520 399 V445"/>
+  <path class="arrow" d="M1520 534 V585"/>
+  <path class="optional" d="M1520 315 C1515 95,970 95,970 310"/>
+  <text x="1170" y="96" class="small" fill="#7c3aed">GRPO updates the LoRA policy</text>
+</svg>

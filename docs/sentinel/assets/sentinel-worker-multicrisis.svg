@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1550" height="780" viewBox="0 0 1550 780" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL worker fleet and multi-crisis architecture</title>
+  <desc id="desc">A diagram showing worker domains, reliability profiles, misbehavior injection, proposals with incident ids, multi-crisis command with three incidents, and SENTINEL routing decisions.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="13" markerHeight="10" refX="11" refY="5" orient="auto">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 33px Arial,sans-serif;fill:#111827}
+      .label{font:700 15.5px Arial,sans-serif;fill:#111827}
+      .small{font:12.5px Arial,sans-serif;fill:#334155}
+      .box{stroke:#334155;stroke-width:2;rx:12;ry:12}
+      .outer{stroke:#94a3b8;stroke-width:1.6;rx:18;ry:18;fill:#ffffff}
+      .arrow{stroke:#334155;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1550" height="780" fill="#f8fafc"/>
+  <text x="55" y="58" class="title">Worker Fleet + Multi-Crisis Command</text>
+  <text x="55" y="90" class="small">The supervisor must reason about who proposed the action, which incident it targets, and whether the worker is acting inside its domain.</text>
+
+  <rect x="45" y="125" width="520" height="260" class="outer"/>
+  <text x="305" y="158" text-anchor="middle" class="label">Worker Agent Fleet</text>
+  <rect x="75" y="190" width="110" height="125" class="box" fill="#dbeafe"/>
+  <text x="130" y="218" text-anchor="middle" class="label">worker_db</text>
+  <text x="130" y="245" text-anchor="middle" class="small">postgres</text>
+  <text x="130" y="267" text-anchor="middle" class="small">redis</text>
+  <text x="130" y="289" text-anchor="middle" class="small">datastores</text>
+  <rect x="205" y="190" width="110" height="125" class="box" fill="#e0f2fe"/>
+  <text x="260" y="218" text-anchor="middle" class="label">worker_net</text>
+  <text x="260" y="245" text-anchor="middle" class="small">DNS</text>
+  <text x="260" y="267" text-anchor="middle" class="small">routes</text>
+  <text x="260" y="289" text-anchor="middle" class="small">load balancer</text>
+  <rect x="335" y="190" width="110" height="125" class="box" fill="#dcfce7"/>
+  <text x="390" y="218" text-anchor="middle" class="label">worker_app</text>
+  <text x="390" y="245" text-anchor="middle" class="small">deploys</text>
+  <text x="390" y="267" text-anchor="middle" class="small">pods</text>
+  <text x="390" y="289" text-anchor="middle" class="small">app logs</text>
+  <rect x="465" y="190" width="80" height="125" class="box" fill="#fef3c7"/>
+  <text x="505" y="218" text-anchor="middle" class="label">sec</text>
+  <text x="505" y="245" text-anchor="middle" class="small">auth</text>
+  <text x="505" y="267" text-anchor="middle" class="small">audit</text>
+  <text x="505" y="289" text-anchor="middle" class="small">certs</text>
+
+  <rect x="90" y="445" width="420" height="160" class="box" fill="#fee2e2"/>
+  <text x="300" y="480" text-anchor="middle" class="label">Misbehavior Injection Engine</text>
+  <text x="300" y="512" text-anchor="middle" class="small">hallucination, scope violation, destructive precedence</text>
+  <text x="300" y="536" text-anchor="middle" class="small">reward hacking, escalation bombing, loop exploitation</text>
+  <text x="300" y="560" text-anchor="middle" class="small">confidence washing, prompt injection</text>
+
+  <rect x="640" y="220" width="250" height="165" class="box" fill="#fff7ed"/>
+  <text x="765" y="255" text-anchor="middle" class="label">Worker Proposal</text>
+  <text x="765" y="287" text-anchor="middle" class="small">worker_id</text>
+  <text x="765" y="311" text-anchor="middle" class="small">incident_id</text>
+  <text x="765" y="335" text-anchor="middle" class="small">action_type + target</text>
+  <text x="765" y="359" text-anchor="middle" class="small">reasoning + confidence</text>
+
+  <rect x="980" y="115" width="450" height="320" class="outer"/>
+  <text x="1205" y="148" text-anchor="middle" class="label">multi_crisis_command</text>
+  <rect x="1015" y="190" width="115" height="105" class="box" fill="#dbeafe"/>
+  <text x="1072" y="220" text-anchor="middle" class="label">Incident A</text>
+  <text x="1072" y="248" text-anchor="middle" class="small">db latency</text>
+  <text x="1072" y="270" text-anchor="middle" class="small">active</text>
+  <rect x="1165" y="190" width="115" height="105" class="box" fill="#e0f2fe"/>
+  <text x="1222" y="220" text-anchor="middle" class="label">Incident B</text>
+  <text x="1222" y="248" text-anchor="middle" class="small">app errors</text>
+  <text x="1222" y="270" text-anchor="middle" class="small">active</text>
+  <rect x="1315" y="190" width="85" height="105" class="box" fill="#dcfce7"/>
+  <text x="1357" y="220" text-anchor="middle" class="label">C</text>
+  <text x="1357" y="248" text-anchor="middle" class="small">network</text>
+  <text x="1357" y="270" text-anchor="middle" class="small">active</text>
+  <rect x="1045" y="335" width="320" height="70" class="box" fill="#ede9fe"/>
+  <text x="1205" y="363" text-anchor="middle" class="label">incident_snapshots + active_incident_count</text>
+  <text x="1205" y="386" text-anchor="middle" class="small">only selected incident advances on approve/redirect/reassign</text>
+
+  <rect x="610" y="500" width="280" height="125" class="box" fill="#fce7f3"/>
+  <text x="750" y="535" text-anchor="middle" class="label">SENTINEL Routing Question</text>
+  <text x="750" y="566" text-anchor="middle" class="small">right worker?</text>
+  <text x="750" y="590" text-anchor="middle" class="small">right incident?</text>
+  <text x="750" y="614" text-anchor="middle" class="small">right evidence?</text>
+
+  <rect x="990" y="500" width="380" height="125" class="box" fill="#ecfccb"/>
+  <text x="1180" y="535" text-anchor="middle" class="label">Possible Oversight Decisions</text>
+  <text x="1180" y="566" text-anchor="middle" class="small">APPROVE safe action</text>
+  <text x="1180" y="590" text-anchor="middle" class="small">REDIRECT safer step, REASSIGN better worker</text>
+  <text x="1180" y="614" text-anchor="middle" class="small">BLOCK unsafe action, FLAG audit risk</text>
+
+  <path class="arrow" d="M300 385 V440"/>
+  <path class="arrow" d="M510 525 H635"/>
+  <path class="arrow" d="M565 252 H635"/>
+  <path class="arrow" d="M890 302 H975"/>
+  <path class="arrow" d="M765 385 V495"/>
+  <path class="arrow" d="M890 562 H985"/>
+  <path class="arrow" d="M1205 435 V495"/>
+</svg>

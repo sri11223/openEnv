@@ -25,6 +25,15 @@ when OpenEnv dependencies are installed.
 Training notebook: [`../../notebooks/sentinel_qwen3_4b_grpo_colab.ipynb`](../../notebooks/sentinel_qwen3_4b_grpo_colab.ipynb)
 is the Colab-friendly Qwen3-4B GRPO runner for the final onsite training proof.
 
+Narrative/pitch source: [`sentinel-story-frame.md`](sentinel-story-frame.md)
+contains the full Round 1 IRT -> SENTINEL story, build doubts, demo script, and
+submission checklist.
+
+Architecture map: [`architecture-map.md`](architecture-map.md) shows the
+runtime loop, training loop, memory/trust system, protocol layer, circuit
+breaker, reward/verifier safety, worker fleet, multi-crisis command, and
+proof-pack flow with rendered diagrams.
+
 ## Summary
 
 SENTINEL wraps the incident-response world in this repo with an oversight layer:
@@ -183,10 +192,8 @@ Training is in `train.py` and uses:
 - task-diversity monitoring so environment coverage stays visible during training
 - judge mode split with deterministic primary scoring and gated generative panel influence
 
-Authoritative training recipe:
-
-- `docs/sentinel/training-readme.md`
-- default model: `unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit`
+Training defaults are kept in `train.py` and the root README's training command section.
+The current default model is `unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit`.
 
 ### Warm Start
 
@@ -246,7 +253,7 @@ python scripts/render_training_dashboard.py \
   --memory-ablation outputs/monitoring/memory_ablation.json
 ```
 
-It creates 18 judge-facing images, including scenario coverage, learning snapshots at target batches 10 / 50 / 300, memory ablation, KL drift, tripwire pass rate, twin-world damage comparison, coaching quality, and zero-gradient group fraction.
+It creates 18 proof-pack images, including scenario coverage, learning snapshots at target batches 10 / 50 / 300, memory ablation, KL drift, tripwire pass rate, twin-world damage comparison, coaching quality, and zero-gradient group fraction.
 
 ## Proof Pack
 
@@ -335,7 +342,7 @@ python scripts/eval_sentinel.py --baseline-checkpoint outputs/warm_start/final -
 # export proof artifacts
 python proof_pack.py --baseline-checkpoint outputs/warm_start/final --candidate-checkpoint outputs/checkpoints/final
 
-# render judge-facing plots
+# render proof-pack plots
 python scripts/render_training_dashboard.py --monitor-dir outputs/monitoring --output-dir outputs/reward_curves
 ```
 
@@ -354,11 +361,8 @@ The cleanest demo sequence is:
 
 Tracked public docs:
 
-- [Training README](training-readme.md)
 - [Public Architecture Overview](public-overview.md)
 - [OpenEnv RL Guide Alignment](openenv-guide-alignment.md)
-- [Submission Readiness](submission-readiness.md)
-- [Implementation Audit](implementation-audit.md)
 - [Dynamic Workers Roadmap](dynamic-workers-roadmap.md)
 - [Universal Oversight Plan](universal-oversight-plan.md)
 
@@ -406,4 +410,4 @@ What still needs the actual long run:
 
 - checkpoint-vs-checkpoint improvement evidence from a trained model
 - final reward curve from the real 300-step run
-- curated judge-facing before/after trajectories
+- curated proof-pack before/after trajectories

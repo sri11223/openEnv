@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1550" height="780" viewBox="0 0 1550 780" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL reward and verifier safety architecture</title>
+  <desc id="desc">A diagram showing model output flowing through structured parsing, deterministic verifier, constitutional checks, trust gate, counterfactual damage, optional judge split, tripwires, final reward, and stability monitoring.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="13" markerHeight="10" refX="11" refY="5" orient="auto">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 33px Arial,sans-serif;fill:#111827}
+      .label{font:700 16px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .box{stroke:#334155;stroke-width:2;rx:12;ry:12}
+      .arrow{stroke:#334155;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+      .optional{stroke:#7c3aed;stroke-width:2.2;fill:none;marker-end:url(#arrow);stroke-dasharray:8 6}
+    </style>
+  </defs>
+  <rect width="1550" height="780" fill="#f8fafc"/>
+  <text x="55" y="58" class="title">Reward + Verifier Safety: Hard Signals First, Judges Gated</text>
+  <text x="55" y="90" class="small">The main reward path is deterministic and auditable. LLM judging is separated and optional.</text>
+
+  <rect x="65" y="155" width="205" height="110" class="box" fill="#dbeafe"/>
+  <text x="167" y="190" text-anchor="middle" class="label">Model Output</text>
+  <text x="167" y="220" text-anchor="middle" class="small">decision JSON</text>
+  <text x="167" y="242" text-anchor="middle" class="small">reason + explanation</text>
+
+  <rect x="335" y="155" width="205" height="110" class="box" fill="#e0f2fe"/>
+  <text x="437" y="190" text-anchor="middle" class="label">Structured Parser</text>
+  <text x="437" y="220" text-anchor="middle" class="small">valid decision fields</text>
+  <text x="437" y="242" text-anchor="middle" class="small">invalid output penalty</text>
+
+  <rect x="605" y="120" width="255" height="180" class="box" fill="#dcfce7"/>
+  <text x="732" y="154" text-anchor="middle" class="label">Deterministic Verifier</text>
+  <text x="732" y="186" text-anchor="middle" class="small">hidden misbehavior labels</text>
+  <text x="732" y="210" text-anchor="middle" class="small">TP / FP / FN accounting</text>
+  <text x="732" y="234" text-anchor="middle" class="small">redirect / reassign correctness</text>
+  <text x="732" y="258" text-anchor="middle" class="small">audit and explanation quality</text>
+
+  <rect x="925" y="105" width="225" height="125" class="box" fill="#fef3c7"/>
+  <text x="1037" y="140" text-anchor="middle" class="label">Constitution Checks</text>
+  <text x="1037" y="172" text-anchor="middle" class="small">P1 blast radius</text>
+  <text x="1037" y="196" text-anchor="middle" class="small">P2 evidence first</text>
+  <text x="1037" y="220" text-anchor="middle" class="small">P3-P5 escalation/domain</text>
+
+  <rect x="925" y="275" width="225" height="125" class="box" fill="#fee2e2"/>
+  <text x="1037" y="310" text-anchor="middle" class="label">Trust Gate</text>
+  <text x="1037" y="342" text-anchor="middle" class="small">low trust + weak evidence</text>
+  <text x="1037" y="366" text-anchor="middle" class="small">auto-block pressure</text>
+  <text x="1037" y="390" text-anchor="middle" class="small">quarantine signal</text>
+
+  <rect x="1215" y="190" width="250" height="145" class="box" fill="#ede9fe"/>
+  <text x="1340" y="225" text-anchor="middle" class="label">Counterfactual Damage</text>
+  <text x="1340" y="256" text-anchor="middle" class="small">what if unsafe action ran?</text>
+  <text x="1340" y="280" text-anchor="middle" class="small">damage prevented</text>
+  <text x="1340" y="304" text-anchor="middle" class="small">risk-reduction reward</text>
+
+  <rect x="340" y="470" width="240" height="145" class="box" fill="#fce7f3"/>
+  <text x="460" y="505" text-anchor="middle" class="label">Eval Tripwires</text>
+  <text x="460" y="536" text-anchor="middle" class="small">gibberish, prefix attack</text>
+  <text x="460" y="560" text-anchor="middle" class="small">format-jamming</text>
+  <text x="460" y="584" text-anchor="middle" class="small">confidence washing</text>
+
+  <rect x="655" y="470" width="240" height="145" class="box" fill="#fff7ed"/>
+  <text x="775" y="505" text-anchor="middle" class="label">Judge Mode Split</text>
+  <text x="775" y="536" text-anchor="middle" class="small">deterministic score primary</text>
+  <text x="775" y="560" text-anchor="middle" class="small">discriminative optional</text>
+  <text x="775" y="584" text-anchor="middle" class="small">generative gated</text>
+
+  <rect x="970" y="470" width="240" height="145" class="box" fill="#ecfccb"/>
+  <text x="1090" y="505" text-anchor="middle" class="label">Final Scalar Reward</text>
+  <text x="1090" y="536" text-anchor="middle" class="small">vector components</text>
+  <text x="1090" y="560" text-anchor="middle" class="small">clipped / normalized</text>
+  <text x="1090" y="584" text-anchor="middle" class="small">collapsed for GRPO</text>
+
+  <rect x="1275" y="470" width="210" height="145" class="box" fill="#e0e7ff"/>
+  <text x="1380" y="505" text-anchor="middle" class="label">Stability Monitor</text>
+  <text x="1380" y="536" text-anchor="middle" class="small">KL drift</text>
+  <text x="1380" y="560" text-anchor="middle" class="small">adaptive beta</text>
+  <text x="1380" y="584" text-anchor="middle" class="small">decision entropy</text>
+
+  <path class="arrow" d="M270 210 H330"/>
+  <path class="arrow" d="M540 210 H600"/>
+  <path class="arrow" d="M860 180 H920"/>
+  <path class="arrow" d="M860 240 C900 240,895 338,920 338"/>
+  <path class="arrow" d="M1150 168 C1190 168,1195 240,1210 240"/>
+  <path class="arrow" d="M1150 338 C1190 338,1195 288,1210 288"/>
+  <path class="arrow" d="M1340 335 C1340 420,1090 420,1090 465"/>
+  <path class="arrow" d="M732 300 C732 410,1090 410,1090 465"/>
+  <path class="optional" d="M580 542 H650"/>
+  <path class="optional" d="M895 542 H965"/>
+  <path class="arrow" d="M1210 542 H1270"/>
+  <path class="optional" d="M437 265 C437 385,460 385,460 465"/>
+</svg>

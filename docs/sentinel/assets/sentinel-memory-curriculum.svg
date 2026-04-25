@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1550" height="780" viewBox="0 0 1550 780" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL memory, trust, and adaptive curriculum architecture</title>
+  <desc id="desc">A diagram showing decision outcomes feeding mistake memory, worker trust, prompt memory injection, adaptive difficulty, productive-signal monitoring, and next prompt selection.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="13" markerHeight="10" refX="11" refY="5" orient="auto">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 33px Arial,sans-serif;fill:#111827}
+      .label{font:700 16px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#334155}
+      .box{stroke:#334155;stroke-width:2;rx:12;ry:12}
+      .arrow{stroke:#334155;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+      .loop{stroke:#7c3aed;stroke-width:2.2;fill:none;marker-end:url(#arrow);stroke-dasharray:8 6}
+    </style>
+  </defs>
+  <rect width="1550" height="780" fill="#f8fafc"/>
+  <text x="55" y="58" class="title">Memory + Trust + Adaptive Curriculum Loop</text>
+  <text x="55" y="90" class="small">This is how SENTINEL learns from oversight mistakes across episodes and keeps training near the frontier.</text>
+
+  <rect x="70" y="155" width="210" height="110" class="box" fill="#dbeafe"/>
+  <text x="175" y="190" text-anchor="middle" class="label">Decision Outcome</text>
+  <text x="175" y="220" text-anchor="middle" class="small">approved, blocked,</text>
+  <text x="175" y="242" text-anchor="middle" class="small">redirected, reassigned</text>
+
+  <rect x="345" y="130" width="240" height="160" class="box" fill="#fee2e2"/>
+  <text x="465" y="164" text-anchor="middle" class="label">Structured Mistake Card</text>
+  <text x="465" y="196" text-anchor="middle" class="small">worker id + task id</text>
+  <text x="465" y="220" text-anchor="middle" class="small">missed evidence</text>
+  <text x="465" y="244" text-anchor="middle" class="small">failure reason</text>
+  <text x="465" y="268" text-anchor="middle" class="small">corrective instruction</text>
+
+  <rect x="665" y="110" width="220" height="125" class="box" fill="#ecfccb"/>
+  <text x="775" y="145" text-anchor="middle" class="label">Global Memory</text>
+  <text x="775" y="176" text-anchor="middle" class="small">general oversight lessons</text>
+  <text x="775" y="200" text-anchor="middle" class="small">what to avoid next time</text>
+
+  <rect x="665" y="280" width="220" height="125" class="box" fill="#dcfce7"/>
+  <text x="775" y="315" text-anchor="middle" class="label">Worker Memory</text>
+  <text x="775" y="346" text-anchor="middle" class="small">worker-specific failures</text>
+  <text x="775" y="370" text-anchor="middle" class="small">repeat offender patterns</text>
+
+  <rect x="965" y="190" width="240" height="145" class="box" fill="#fef3c7"/>
+  <text x="1085" y="225" text-anchor="middle" class="label">Trust Profile Update</text>
+  <text x="1085" y="256" text-anchor="middle" class="small">trust score</text>
+  <text x="1085" y="280" text-anchor="middle" class="small">trust tier</text>
+  <text x="1085" y="304" text-anchor="middle" class="small">evidence-required mode</text>
+
+  <rect x="1280" y="185" width="210" height="155" class="box" fill="#ede9fe"/>
+  <text x="1385" y="220" text-anchor="middle" class="label">Next Prompt Context</text>
+  <text x="1385" y="252" text-anchor="middle" class="small">memory injected</text>
+  <text x="1385" y="276" text-anchor="middle" class="small">trust warning</text>
+  <text x="1385" y="300" text-anchor="middle" class="small">worker-specific hints</text>
+  <text x="1385" y="324" text-anchor="middle" class="small">safer supervision pattern</text>
+
+  <rect x="185" y="500" width="260" height="145" class="box" fill="#e0e7ff"/>
+  <text x="315" y="535" text-anchor="middle" class="label">Productive Signal Monitor</text>
+  <text x="315" y="566" text-anchor="middle" class="small">zero reward fraction</text>
+  <text x="315" y="590" text-anchor="middle" class="small">productive fraction</text>
+  <text x="315" y="614" text-anchor="middle" class="small">zero-gradient groups</text>
+
+  <rect x="565" y="500" width="260" height="145" class="box" fill="#fce7f3"/>
+  <text x="695" y="535" text-anchor="middle" class="label">Adaptive Difficulty</text>
+  <text x="695" y="566" text-anchor="middle" class="small">difficulty_low/high</text>
+  <text x="695" y="590" text-anchor="middle" class="small">mastery attempts/successes</text>
+  <text x="695" y="614" text-anchor="middle" class="small">sliding frontier window</text>
+
+  <rect x="945" y="500" width="260" height="145" class="box" fill="#fff7ed"/>
+  <text x="1075" y="535" text-anchor="middle" class="label">Scenario Sampler</text>
+  <text x="1075" y="566" text-anchor="middle" class="small">chooses next task</text>
+  <text x="1075" y="590" text-anchor="middle" class="small">keeps model near frontier</text>
+  <text x="1075" y="614" text-anchor="middle" class="small">avoids wasted batches</text>
+
+  <path class="arrow" d="M280 210 H340"/>
+  <path class="arrow" d="M585 180 H660"/>
+  <path class="arrow" d="M585 240 C620 240,625 342,660 342"/>
+  <path class="arrow" d="M885 172 C925 172,925 240,960 240"/>
+  <path class="arrow" d="M885 342 C925 342,925 286,960 286"/>
+  <path class="arrow" d="M1205 262 H1275"/>
+  <path class="arrow" d="M465 290 C465 425,315 425,315 495"/>
+  <path class="arrow" d="M445 572 H560"/>
+  <path class="arrow" d="M825 572 H940"/>
+  <path class="loop" d="M1075 500 C1075 445,1385 445,1385 345"/>
+  <path class="loop" d="M1385 185 C1385 95,175 95,175 150"/>
+</svg>

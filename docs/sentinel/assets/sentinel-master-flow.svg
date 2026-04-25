@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="650" viewBox="0 0 1600 650" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL master architecture flow</title>
+  <desc id="desc">A left-to-right architecture flow showing company world, worker fleet, proposal, SENTINEL gate, decision, execution, reward, training, memory, and proof pack.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="14" markerHeight="10" refX="12" refY="5" orient="auto">
+      <path d="M0,0 L14,5 L0,10 Z" fill="#2f3b52"/>
+    </marker>
+    <style>
+      .title{font:700 34px Arial,sans-serif;fill:#121826}
+      .label{font:700 18px Arial,sans-serif;fill:#121826}
+      .small{font:14px Arial,sans-serif;fill:#243044}
+      .tiny{font:12px Arial,sans-serif;fill:#475569}
+      .box{stroke:#2f3b52;stroke-width:2.2;rx:14;ry:14}
+      .arrow{stroke:#2f3b52;stroke-width:2.4;fill:none;marker-end:url(#arrow)}
+      .loop{stroke:#7c3aed;stroke-width:2.4;fill:none;marker-end:url(#arrow);stroke-dasharray:8 6}
+    </style>
+  </defs>
+
+  <rect width="1600" height="650" fill="#f8fafc"/>
+  <text x="60" y="60" class="title">SENTINEL Master Flow: AI Supervising AI Workers Before Execution</text>
+  <text x="60" y="92" class="small">Read this first. It is the whole system as boxes and arrows.</text>
+
+  <rect x="55" y="150" width="155" height="118" class="box" fill="#dbeafe"/>
+  <text x="132" y="184" text-anchor="middle" class="label">Company World</text>
+  <text x="132" y="212" text-anchor="middle" class="small">tools, APIs,</text>
+  <text x="132" y="234" text-anchor="middle" class="small">incidents, tasks</text>
+
+  <rect x="250" y="150" width="155" height="118" class="box" fill="#e0f2fe"/>
+  <text x="327" y="184" text-anchor="middle" class="label">Worker Fleet</text>
+  <text x="327" y="212" text-anchor="middle" class="small">db, app, net, sec</text>
+  <text x="327" y="234" text-anchor="middle" class="small">deterministic/Groq</text>
+
+  <rect x="445" y="150" width="155" height="118" class="box" fill="#fef3c7"/>
+  <text x="522" y="184" text-anchor="middle" class="label">Proposal</text>
+  <text x="522" y="212" text-anchor="middle" class="small">action + target</text>
+  <text x="522" y="234" text-anchor="middle" class="small">reasoning + incident</text>
+
+  <rect x="640" y="132" width="180" height="154" class="box" fill="#fecaca"/>
+  <text x="730" y="174" text-anchor="middle" class="label">SENTINEL Gate</text>
+  <text x="730" y="204" text-anchor="middle" class="small">pre-execution</text>
+  <text x="730" y="226" text-anchor="middle" class="small">AI supervisor</text>
+  <text x="730" y="248" text-anchor="middle" class="tiny">trust + constitution + memory</text>
+
+  <rect x="865" y="150" width="175" height="118" class="box" fill="#ede9fe"/>
+  <text x="952" y="184" text-anchor="middle" class="label">Decision</text>
+  <text x="952" y="212" text-anchor="middle" class="small">approve, block,</text>
+  <text x="952" y="234" text-anchor="middle" class="small">redirect, reassign, flag</text>
+
+  <rect x="1085" y="150" width="165" height="118" class="box" fill="#dcfce7"/>
+  <text x="1167" y="184" text-anchor="middle" class="label">Execute</text>
+  <text x="1167" y="212" text-anchor="middle" class="small">only safe or</text>
+  <text x="1167" y="234" text-anchor="middle" class="small">corrected actions</text>
+
+  <rect x="1290" y="150" width="165" height="118" class="box" fill="#fce7f3"/>
+  <text x="1372" y="184" text-anchor="middle" class="label">Reward</text>
+  <text x="1372" y="212" text-anchor="middle" class="small">TP, FP, FN, damage</text>
+  <text x="1372" y="234" text-anchor="middle" class="small">audit + coaching</text>
+
+  <path class="arrow" d="M210 209 H245"/>
+  <path class="arrow" d="M405 209 H440"/>
+  <path class="arrow" d="M600 209 H635"/>
+  <path class="arrow" d="M820 209 H860"/>
+  <path class="arrow" d="M1040 209 H1080"/>
+  <path class="arrow" d="M1250 209 H1285"/>
+
+  <rect x="420" y="370" width="225" height="120" class="box" fill="#fff7ed"/>
+  <text x="532" y="404" text-anchor="middle" class="label">Corrective Feedback</text>
+  <text x="532" y="432" text-anchor="middle" class="small">why blocked</text>
+  <text x="532" y="454" text-anchor="middle" class="small">required evidence</text>
+  <text x="532" y="476" text-anchor="middle" class="small">safer fix / reassign target</text>
+
+  <rect x="710" y="370" width="210" height="120" class="box" fill="#f1f5f9"/>
+  <text x="815" y="404" text-anchor="middle" class="label">GRPO Training</text>
+  <text x="815" y="432" text-anchor="middle" class="small">LoRA update moves</text>
+  <text x="815" y="454" text-anchor="middle" class="small">policy toward better</text>
+  <text x="815" y="476" text-anchor="middle" class="small">oversight decisions</text>
+
+  <rect x="985" y="370" width="210" height="120" class="box" fill="#ecfccb"/>
+  <text x="1090" y="404" text-anchor="middle" class="label">Memory + Trust</text>
+  <text x="1090" y="432" text-anchor="middle" class="small">global lessons</text>
+  <text x="1090" y="454" text-anchor="middle" class="small">worker mistakes</text>
+  <text x="1090" y="476" text-anchor="middle" class="small">evidence-required mode</text>
+
+  <rect x="1270" y="370" width="235" height="120" class="box" fill="#e0e7ff"/>
+  <text x="1387" y="404" text-anchor="middle" class="label">Proof Pack</text>
+  <text x="1387" y="432" text-anchor="middle" class="small">reward curves, OOD eval</text>
+  <text x="1387" y="454" text-anchor="middle" class="small">Top-1 vs Best-of-K, KL</text>
+  <text x="1387" y="476" text-anchor="middle" class="small">rollout audits, snapshots</text>
+
+  <path class="arrow" d="M952 268 C940 338, 770 338, 645 404"/>
+  <text x="797" y="336" class="tiny">if unsafe: block / redirect / reassign</text>
+  <path class="arrow" d="M645 430 H705"/>
+  <path class="arrow" d="M920 430 H980"/>
+  <path class="arrow" d="M1195 430 H1265"/>
+  <path class="loop" d="M1090 490 C1060 570, 370 570, 327 273"/>
+  <text x="615" y="555" class="tiny" fill="#7c3aed">memory and trust shape the next proposal</text>
+</svg>

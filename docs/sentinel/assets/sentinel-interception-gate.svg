@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760" role="img" aria-labelledby="title desc">
+  <title id="title">SENTINEL interception gate detail</title>
+  <desc id="desc">A diagram showing workers entering the SENTINEL interception gate, prechecks, input bundle, policy output, execution outcomes, and logging outputs.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="13" markerHeight="10" refX="11" refY="5" orient="auto">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .title{font:700 34px Arial,sans-serif;fill:#111827}
+      .label{font:700 16px Arial,sans-serif;fill:#111827}
+      .small{font:13px Arial,sans-serif;fill:#374151}
+      .tiny{font:12px Arial,sans-serif;fill:#475569}
+      .box{stroke:#1f2937;stroke-width:2;rx:11;ry:11}
+      .outer{stroke:#1f2937;stroke-width:2.5;rx:18;ry:18;fill:#ffffff}
+      .arrow{stroke:#1f2937;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1500" height="760" fill="#f8fafc"/>
+  <text x="50" y="60" class="title">Interception Gate Detail: The Core Innovation</text>
+  <text x="50" y="92" class="small">Workers cannot execute directly. Every proposal must pass through SENTINEL first.</text>
+
+  <rect x="55" y="165" width="130" height="48" class="box" fill="#e0f2fe"/>
+  <text x="120" y="195" text-anchor="middle" class="label">worker_db</text>
+  <rect x="55" y="235" width="130" height="48" class="box" fill="#e0f2fe"/>
+  <text x="120" y="265" text-anchor="middle" class="label">worker_net</text>
+  <rect x="55" y="305" width="130" height="48" class="box" fill="#e0f2fe"/>
+  <text x="120" y="335" text-anchor="middle" class="label">worker_app</text>
+  <rect x="55" y="375" width="130" height="48" class="box" fill="#e0f2fe"/>
+  <text x="120" y="405" text-anchor="middle" class="label">worker_sec</text>
+
+  <rect x="250" y="120" width="560" height="470" class="outer"/>
+  <text x="530" y="155" text-anchor="middle" class="label">SENTINEL Interception Gate</text>
+  <text x="530" y="180" text-anchor="middle" class="tiny">pre-execution layer inside sentinel/environment.py</text>
+
+  <rect x="285" y="220" width="160" height="190" class="box" fill="#f1f5f9"/>
+  <text x="365" y="250" text-anchor="middle" class="label">Pre-checks</text>
+  <text x="365" y="282" text-anchor="middle" class="small">trust tier</text>
+  <text x="365" y="307" text-anchor="middle" class="small">evidence present</text>
+  <text x="365" y="332" text-anchor="middle" class="small">domain match</text>
+  <text x="365" y="357" text-anchor="middle" class="small">constitution risk</text>
+  <text x="365" y="382" text-anchor="middle" class="small">auto-block checks</text>
+
+  <rect x="485" y="185" width="220" height="260" class="box" fill="#fecaca"/>
+  <text x="595" y="220" text-anchor="middle" class="label">Input Bundle</text>
+  <text x="595" y="254" text-anchor="middle" class="small">incident state</text>
+  <text x="595" y="279" text-anchor="middle" class="small">proposed action</text>
+  <text x="595" y="304" text-anchor="middle" class="small">worker history</text>
+  <text x="595" y="329" text-anchor="middle" class="small">recent audits</text>
+  <text x="595" y="354" text-anchor="middle" class="small">constitution</text>
+  <text x="595" y="379" text-anchor="middle" class="small">memory context</text>
+  <text x="595" y="404" text-anchor="middle" class="small">active incidents</text>
+
+  <rect x="515" y="485" width="190" height="72" class="box" fill="#fde68a"/>
+  <text x="610" y="515" text-anchor="middle" class="label">Qwen3 LoRA Policy</text>
+  <text x="610" y="540" text-anchor="middle" class="small">structured decision</text>
+
+  <rect x="850" y="150" width="230" height="310" class="box" fill="#ede9fe"/>
+  <text x="965" y="185" text-anchor="middle" class="label">Oversight Output</text>
+  <text x="965" y="220" text-anchor="middle" class="small">decision</text>
+  <text x="965" y="245" text-anchor="middle" class="small">reason</text>
+  <text x="965" y="270" text-anchor="middle" class="small">explanation</text>
+  <text x="965" y="295" text-anchor="middle" class="small">required_evidence</text>
+  <text x="965" y="320" text-anchor="middle" class="small">suggested_fix</text>
+  <text x="965" y="345" text-anchor="middle" class="small">suggested_action_type</text>
+  <text x="965" y="370" text-anchor="middle" class="small">suggested_target</text>
+  <text x="965" y="395" text-anchor="middle" class="small">reassign_to</text>
+  <text x="965" y="420" text-anchor="middle" class="small">trust_impact</text>
+
+  <rect x="1160" y="130" width="210" height="58" class="box" fill="#dcfce7"/>
+  <text x="1265" y="166" text-anchor="middle" class="label">APPROVE -> execute</text>
+  <rect x="1160" y="220" width="210" height="58" class="box" fill="#d1fae5"/>
+  <text x="1265" y="256" text-anchor="middle" class="label">REDIRECT -> safer step</text>
+  <rect x="1160" y="310" width="210" height="58" class="box" fill="#e0e7ff"/>
+  <text x="1265" y="346" text-anchor="middle" class="label">REASSIGN -> better worker</text>
+  <rect x="1160" y="400" width="210" height="58" class="box" fill="#fee2e2"/>
+  <text x="1265" y="436" text-anchor="middle" class="label">BLOCK -> not executed</text>
+  <rect x="1160" y="490" width="210" height="58" class="box" fill="#fef3c7"/>
+  <text x="1265" y="526" text-anchor="middle" class="label">FLAG -> warning log</text>
+
+  <rect x="330" y="625" width="270" height="82" class="box" fill="#dcfce7"/>
+  <text x="465" y="655" text-anchor="middle" class="label">Decision Outputs</text>
+  <text x="465" y="680" text-anchor="middle" class="small">audit records + trust update</text>
+  <text x="465" y="700" text-anchor="middle" class="small">dashboard metrics</text>
+
+  <path class="arrow" d="M185 189 C220 189,235 250,280 250"/>
+  <path class="arrow" d="M185 259 C220 259,235 292,280 292"/>
+  <path class="arrow" d="M185 329 C220 329,235 334,280 334"/>
+  <path class="arrow" d="M185 399 C220 399,235 376,280 376"/>
+  <path class="arrow" d="M445 315 H480"/>
+  <path class="arrow" d="M595 445 V480"/>
+  <path class="arrow" d="M705 520 C790 520,790 305,845 305"/>
+  <path class="arrow" d="M1080 180 H1155"/>
+  <path class="arrow" d="M1080 250 H1155"/>
+  <path class="arrow" d="M1080 340 H1155"/>
+  <path class="arrow" d="M1080 430 H1155"/>
+  <path class="arrow" d="M1080 520 H1155"/>
+  <path class="arrow" d="M1265 548 C1265 650,610 650,600 666"/>
+</svg>
