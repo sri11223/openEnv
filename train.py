@@ -306,10 +306,19 @@ def load_model_and_tokenizer():
     if USE_UNSLOTH:
         logger.info("Loading model with Unsloth: %s", MODEL_NAME)
         from unsloth import FastLanguageModel
+        # Explicit dtype is REQUIRED: Unsloth's custom GRPO matmul kernels
+        # do NOT respect autocast; base/LoRA/activation dtypes must match the
+        # GRPOConfig bf16/fp16 setting natively, or you hit
+        # "self and mat2 must have the same dtype" mid-step.
+        _unsloth_dtype = (
+            torch.bfloat16
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else (torch.float16 if torch.cuda.is_available() else torch.float32)
+        )
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name           = MODEL_NAME,
             max_seq_length       = 4096,
-            dtype                = None,
+            dtype                = _unsloth_dtype,
             load_in_4bit         = True,
             token                = HF_TOKEN or None,
         )
@@ -618,6 +627,19 @@ def train():
             from peft import PeftModel
             if not hasattr(model, "peft_config"):
                 model = PeftModel.from_pretrained(model, warm_start_path)
+            # Coerce LoRA adapter dtype to match the base model. bnb-4bit base
+            # weights are unaffected by .to(dtype); only the (small) LoRA
+            # adapters and biases get cast. This prevents the
+            # "self and mat2 must have the same dtype" crash inside Unsloth's
+            # fast_lora kernels when the cached adapter was saved at a
+            # different dtype than the freshly-loaded base.
+            if torch.cuda.is_available():
+                target_dtype = (
+                    torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                )
+                for name, param in model.named_parameters():
+                    if "lora_" in name and param.dtype != target_dtype:
+                        param.data = param.data.to(target_dtype)
             logger.info("Loaded warm-start LoRA from %s", warm_start_path)
         except Exception as exc:
             logger.warning("Could not reload warm-start LoRA: %s (continuing with base model)", exc)
