@@ -131,15 +131,18 @@ class CurriculumController:
         )
         self._state_path = state_path or _default_state_path_for_tasks(self._active_task_ids)
 
+        self._load()
+        self._ensure_adaptive_state()
+
+        # Apply EVAL_MIN_DIFFICULTY as a floor AFTER loading saved state so it
+        # is not silently overwritten by the persisted tier_index.
         min_diff = float(os.environ.get("EVAL_MIN_DIFFICULTY", "0.0"))
         if min_diff > 0:
             for i, tier in enumerate(DIFFICULTY_TIERS):
                 if tier["max_diff"] >= min_diff:
-                    self._state.tier_index = i
+                    if self._state.tier_index < i:
+                        self._state.tier_index = i
                     break
-
-        self._load()
-        self._ensure_adaptive_state()
 
     @property
     def tier_index(self) -> int:
