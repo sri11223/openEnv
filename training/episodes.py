@@ -2,6 +2,12 @@
 """Training episodes: episode runners, fallback decisions, history helpers, GRPO reward.
 
 Extracted from train.py to keep the training pipeline modular.
+
+Key design: the model can generate decisions for multiple steps (not just the
+first).  The ``model_steps_limit`` parameter controls how many steps the model
+provides before falling back to the greedy heuristic.  The final GRPO reward is
+weighted by the model's contribution fraction so the gradient is meaningful for
+full sequential oversight policy learning.
 """
 
 from __future__ import annotations
@@ -176,25 +182,66 @@ def run_episode_with_completion(
     task_id: str,
     variant_seed: int,
     sentinel_task_ids: List[str],
+    model_steps_limit: int = 1,
 ) -> Tuple[float, List[Dict]]:
     """
     Execute one episode by feeding the model's completion back into the env.
 
-    The model generates the FIRST action/decision. We then run a simple agent loop
-    (greedy, temp=0 via direct env calls) to complete the episode.
+    The model generates up to ``model_steps_limit`` actions/decisions.  For
+    multi-step mode the completion text should be a JSON *array* of decisions
+    (or a single dict for backward-compatible single-step mode).  After the
+    model's steps are exhausted we fall back to the greedy heuristic.
+
+    The final score is weighted by the model-contribution fraction so GRPO
+    receives a gradient proportional to how much of the policy the model
+    actually controlled.
 
     Returns: (score, action_history)
     """
     is_sentinel = task_id in sentinel_task_ids
 
     if is_sentinel:
-        return _run_sentinel_episode(completion_text, task_id, variant_seed)
+        return _run_sentinel_episode(completion_text, task_id, variant_seed,
+                                     model_steps_limit=model_steps_limit)
     else:
-        return _run_irt_episode(completion_text, task_id, variant_seed)
+        return _run_irt_episode(completion_text, task_id, variant_seed,
+                                model_steps_limit=model_steps_limit)
 
 
-def _run_irt_episode(completion_text: str, task_id: str, variant_seed: int) -> Tuple[float, List[Dict]]:
-    """Run IRT episode."""
+def _parse_multi_step_actions(text: str, limit: int) -> List[Dict[str, Any]]:
+    """Parse up to *limit* actions from a model completion.
+
+    Supports:
+      - A single JSON object  (backward-compatible single-step)
+      - A JSON array of objects (multi-step mode)
+    """
+    actions: List[Dict[str, Any]] = []
+    text = text.strip()
+    # Try JSON array first
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            for item in parsed[:limit]:
+                if isinstance(item, dict):
+                    actions.append(item)
+            if actions:
+                return actions
+    except json.JSONDecodeError:
+        pass
+    # Try single JSON object
+    single = parse_action(text)
+    if single is not None:
+        actions.append(single)
+    return actions[:limit]
+
+
+def _run_irt_episode(
+    completion_text: str,
+    task_id: str,
+    variant_seed: int,
+    model_steps_limit: int = 1,
+) -> Tuple[float, List[Dict]]:
+    """Run IRT episode with multi-step model generation."""
     from src.environment import IncidentResponseEnv
 
     env = IncidentResponseEnv()
@@ -202,28 +249,45 @@ def _run_irt_episode(completion_text: str, task_id: str, variant_seed: int) -> T
         obs = env.reset(task_id=task_id, variant_seed=variant_seed)
         done = False
         history: List[Dict] = []
+        model_steps_used = 0
+        total_steps = 0
 
-        # Parse first action from completion
-        first_action = parse_action(completion_text)
-        if first_action is None:
+        # Parse model-generated actions (potentially multi-step)
+        model_actions = _parse_multi_step_actions(completion_text, model_steps_limit)
+        if not model_actions:
             return 0.0, []
 
-        # Step 1: use the model's generated action
-        result = env.step(first_action)
-        done = result.done
-        history.append({"action": first_action, "step_reward": float(result.reward.total)})
+        # Execute model-generated actions first
+        for action in model_actions:
+            if done:
+                break
+            result = env.step(action)
+            done = result.done
+            history.append({
+                "action": action,
+                "step_reward": float(result.reward.total),
+                "source": "model",
+            })
+            model_steps_used += 1
+            total_steps += 1
 
         # Remaining steps: use a greedy rule-based fallback
-        step = 1
-        while not done and step < 20:
+        while not done and total_steps < 20:
             fallback_action = greedy_fallback_action(env, obs, history)
             result = env.step(fallback_action)
             done = result.done
-            history.append({"action": fallback_action, "step_reward": float(result.reward.total)})
-            step += 1
+            history.append({
+                "action": fallback_action,
+                "step_reward": float(result.reward.total),
+                "source": "fallback",
+            })
+            total_steps += 1
 
         grade = env.grade()
-        score = float(grade.score) if hasattr(grade, "score") else float(grade.get("score", 0.0))
+        raw_score = float(grade.score) if hasattr(grade, "score") else float(grade.get("score", 0.0))
+
+        # Weight by model contribution fraction so GRPO gradient is meaningful
+        score = _contribution_weighted_score(raw_score, model_steps_used, total_steps)
         return score, history
 
     except Exception as e:
@@ -231,8 +295,13 @@ def _run_irt_episode(completion_text: str, task_id: str, variant_seed: int) -> T
         return 0.0, []
 
 
-def _run_sentinel_episode(completion_text: str, task_id: str, variant_seed: int) -> Tuple[float, List[Dict]]:
-    """Run SENTINEL episode."""
+def _run_sentinel_episode(
+    completion_text: str,
+    task_id: str,
+    variant_seed: int,
+    model_steps_limit: int = 1,
+) -> Tuple[float, List[Dict]]:
+    """Run SENTINEL episode with multi-step model generation."""
     from sentinel.environment import SentinelEnv
 
     env = SentinelEnv()
@@ -241,33 +310,69 @@ def _run_sentinel_episode(completion_text: str, task_id: str, variant_seed: int)
         done = False
         history: List[Dict] = []
         max_steps = getattr(obs, "max_steps", 30) or 30
+        model_steps_used = 0
+        total_steps = 0
 
-        # Parse first decision from completion
-        first_decision = parse_action(completion_text)
-        if first_decision is None:
+        # Parse model-generated decisions (potentially multi-step)
+        model_decisions = _parse_multi_step_actions(completion_text, model_steps_limit)
+        if not model_decisions:
             return 0.0, []
 
-        # Step 1: use the model's generated decision
-        result = env.step(first_decision)
-        done = result.done
-        history.append(_sentinel_history_entry(first_decision, result))
+        # Execute model-generated decisions first
+        for decision in model_decisions:
+            if done:
+                break
+            result = env.step(decision)
+            done = result.done
+            entry = _sentinel_history_entry(decision, result)
+            entry["source"] = "model"
+            history.append(entry)
+            model_steps_used += 1
+            total_steps += 1
 
         # Remaining steps: use a simple approve-majority fallback
-        step = 1
-        while not done and step < max_steps:
+        while not done and total_steps < max_steps:
             fallback_decision = greedy_fallback_sentinel_decision(result.observation, history)
             result = env.step(fallback_decision)
             done = result.done
-            history.append(_sentinel_history_entry(fallback_decision, result))
-            step += 1
+            entry = _sentinel_history_entry(fallback_decision, result)
+            entry["source"] = "fallback"
+            history.append(entry)
+            total_steps += 1
 
         grade = env.grade()
-        score = float(grade.score) if hasattr(grade, "score") else float(grade.get("score", 0.0))
+        raw_score = float(grade.score) if hasattr(grade, "score") else float(grade.get("score", 0.0))
+
+        # Weight by model contribution fraction so GRPO gradient is meaningful
+        score = _contribution_weighted_score(raw_score, model_steps_used, total_steps)
         return score, history
 
     except Exception as e:
         logger.debug("SENTINEL episode failed: %s", e)
         return 0.0, []
+
+
+def _contribution_weighted_score(
+    raw_score: float,
+    model_steps: int,
+    total_steps: int,
+) -> float:
+    """Blend the raw episode score by the model's contribution fraction.
+
+    This ensures GRPO attributes reward proportionally to steps the model
+    actually controlled, avoiding the pathology where the model only learns
+    first-step heuristics while the greedy fallback does the real work.
+
+    Formula:  weighted = base_floor + (raw - base_floor) * contribution
+    where contribution = model_steps / total_steps
+    and base_floor = 0.15  (so even a good first step gets partial credit).
+    """
+    if total_steps <= 0:
+        return raw_score
+    contribution = model_steps / total_steps
+    base_floor = 0.15
+    weighted = base_floor + (raw_score - base_floor) * max(contribution, 0.3)
+    return float(np.clip(weighted, 0.0, 1.0))
 
 
 def run_sentinel_adversarial_case(
@@ -484,9 +589,16 @@ def grpo_reward_fn(
     use_llm_panel: bool = False,
     groq_api_key: str = "",
     wandb_enabled: bool = False,
+    model_steps_limit: int = 1,
     **kwargs,
 ) -> List[float] | Tuple[List[float], List[List[Dict[str, Any]]]]:
-    """Called by GRPOTrainer after generating each group of completions."""
+    """Called by GRPOTrainer after generating each group of completions.
+
+    Args:
+        model_steps_limit: How many steps the model generates per episode before
+                           falling back to the greedy heuristic.  Higher values
+                           give GRPO more policy surface to optimise.
+    """
     rewards = []
     histories: List[List[Dict[str, Any]]] = []
 
@@ -498,7 +610,10 @@ def grpo_reward_fn(
         if case_payload:
             score, history = run_sentinel_adversarial_case(completion, case_payload)
         else:
-            score, history = run_episode_with_completion(completion, t_id, seed, sentinel_task_ids)
+            score, history = run_episode_with_completion(
+                completion, t_id, seed, sentinel_task_ids,
+                model_steps_limit=model_steps_limit,
+            )
 
         # Optional: LLM panel hybrid
         if use_llm_panel and history:

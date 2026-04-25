@@ -30,6 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,6 +150,7 @@ def generate_phase_env_vars(phase: int, checkpoint: Optional[str] = None) -> dic
     """Generate environment variables for running train.py with phase config."""
     config = get_phase_config(phase, checkpoint)
     env_vars = {
+        "USE_SENTINEL": "1",
         "TRAIN_STEPS": str(config["steps"]),
         "LR": str(config["learning_rate"]),
         "KL_COEF": str(config["kl_coef"]),
@@ -155,10 +158,66 @@ def generate_phase_env_vars(phase: int, checkpoint: Optional[str] = None) -> dic
         "OUTPUT_DIR": config["output_dir"],
         "SENTINEL_TASKS": ",".join(config["tasks"]),
         "REWARD_PROFILE": config["reward_profile"],
+        "REWARD_SCHEDULE_MODE": config["reward_profile"],
+        "MODEL_STEPS_LIMIT": str(config.get("model_steps_limit", 1)),
     }
     if checkpoint:
         env_vars["RESUME_FROM"] = checkpoint
     return env_vars
+
+
+def generate_deepspeed_config(
+    output_path: str = "outputs/ds_config_zero2.json",
+) -> str:
+    """Generate a DeepSpeed ZeRO Stage 2 config suitable for GRPO training."""
+    config = {
+        "bf16": {"enabled": True},
+        "zero_optimization": {
+            "stage": 2,
+            "offload_optimizer": {"device": "cpu", "pin_memory": True},
+            "allgather_partitions": True,
+            "allgather_bucket_size": 2e8,
+            "overlap_comm": True,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 2e8,
+            "contiguous_gradients": True,
+        },
+        "gradient_accumulation_steps": "auto",
+        "gradient_clipping": 1.0,
+        "train_batch_size": "auto",
+        "train_micro_batch_size_per_gpu": "auto",
+        "wall_clock_breakdown": False,
+    }
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    return output_path
+
+
+def build_launch_command(
+    phase: int,
+    checkpoint: Optional[str] = None,
+    use_accelerate: bool = False,
+    deepspeed_config: Optional[str] = None,
+    num_processes: Optional[int] = None,
+) -> str:
+    """Build the full shell command to launch a phase, optionally via accelerate."""
+    env_vars = generate_phase_env_vars(phase, checkpoint)
+    env_prefix = " ".join(f"{k}={v}" for k, v in env_vars.items())
+
+    if use_accelerate or deepspeed_config:
+        accelerate_bin = shutil.which("accelerate") or "accelerate"
+        parts = [accelerate_bin, "launch"]
+        if num_processes:
+            parts += ["--num_processes", str(num_processes)]
+        if deepspeed_config:
+            parts += ["--use_deepspeed", "--deepspeed_config_file", deepspeed_config]
+        parts.append("train.py")
+        cmd = " ".join(parts)
+    else:
+        cmd = f"python train.py"
+
+    return f"{env_prefix} {cmd}"
 
 
 def print_phase_plan():
@@ -223,33 +282,75 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, help="Checkpoint from previous phase")
     parser.add_argument("--plan", action="store_true", help="Print training plan only")
     parser.add_argument("--all", action="store_true", help="Run all 3 phases sequentially")
+    parser.add_argument("--accelerate", action="store_true", help="Launch via accelerate (multi-GPU / DDP)")
+    parser.add_argument("--deepspeed", type=str, default=None,
+                        help="Path to DeepSpeed config JSON (auto-generates ZeRO-2 if 'auto')")
+    parser.add_argument("--num-processes", type=int, default=None,
+                        help="Number of processes for accelerate launch")
+    parser.add_argument("--run", action="store_true",
+                        help="Actually run the training (not just print commands)")
     args = parser.parse_args()
 
     if args.plan:
         print_phase_plan()
         sys.exit(0)
 
+    # Auto-generate DeepSpeed config if requested
+    ds_config_path = args.deepspeed
+    if ds_config_path == "auto":
+        ds_config_path = generate_deepspeed_config()
+        print(f"Generated DeepSpeed ZeRO-2 config at: {ds_config_path}")
+
+    use_accelerate = args.accelerate or bool(ds_config_path)
+
     if args.all:
         print_phase_plan()
-        print("\nReady to run all 3 phases. Use train.py with the env vars above.")
+        print("\nReady to run all 3 phases.")
         for phase in [1, 2, 3]:
-            env_vars = generate_phase_env_vars(
+            ckpt = f"outputs/phase{phase-1}/final" if phase > 1 else None
+            cmd = build_launch_command(
                 phase,
-                f"outputs/phase{phase-1}/final" if phase > 1 else None,
+                checkpoint=ckpt,
+                use_accelerate=use_accelerate,
+                deepspeed_config=ds_config_path,
+                num_processes=args.num_processes,
             )
-            print(f"\n--- Phase {phase} env vars ---")
-            for k, v in env_vars.items():
-                print(f"  {k}={v}")
+            print(f"\n--- Phase {phase} ---")
+            print(f"  {cmd}")
+            if args.run:
+                if phase > 1:
+                    log_phase_transition(phase - 1, phase, ckpt)
+                env_vars = generate_phase_env_vars(phase, ckpt)
+                env = {**os.environ, **env_vars}
+                print(f"  Running phase {phase}...")
+                result = subprocess.run(cmd, shell=True, env=env)
+                if result.returncode != 0:
+                    print(f"  Phase {phase} failed with code {result.returncode}")
+                    sys.exit(result.returncode)
+                print(f"  Phase {phase} complete.")
         sys.exit(0)
 
     if not args.phase:
         parser.error("Specify --phase N or --all or --plan")
 
-    env_vars = generate_phase_env_vars(args.phase, args.checkpoint)
+    cmd = build_launch_command(
+        args.phase,
+        checkpoint=args.checkpoint,
+        use_accelerate=use_accelerate,
+        deepspeed_config=ds_config_path,
+        num_processes=args.num_processes,
+    )
     print(f"\nPhase {args.phase}: {PHASES[args.phase]['name']}")
-    print(f"Environment variables for train.py:")
-    for k, v in env_vars.items():
-        print(f"  export {k}={v}")
+    print(f"Command:")
+    print(f"  {cmd}")
+
+    if args.run:
+        env_vars = generate_phase_env_vars(args.phase, args.checkpoint)
+        env = {**os.environ, **env_vars}
+        if args.checkpoint and args.phase > 1:
+            log_phase_transition(args.phase - 1, args.phase, args.checkpoint)
+        result = subprocess.run(cmd, shell=True, env=env)
+        sys.exit(result.returncode)
 
     if args.checkpoint and args.phase > 1:
         log_phase_transition(args.phase - 1, args.phase, args.checkpoint)

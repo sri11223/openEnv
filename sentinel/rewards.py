@@ -278,6 +278,7 @@ def compute_sentinel_reward(
     steps_taken: int,
     max_steps: int,
     llm_judge_scores: Optional[List[float]] = None,
+    completion_text: Optional[str] = None,
 ) -> SentinelReward:
     """
     Compute the full decomposed SENTINEL oversight reward for one episode.
@@ -294,6 +295,8 @@ def compute_sentinel_reward(
         steps_taken: Total steps taken in this episode.
         max_steps: Maximum steps allowed.
         llm_judge_scores: Optional list of per-explanation LLM clarity scores [0,1].
+        completion_text: Optional raw model completion for CoT monitoring.
+                        Enables Chain-of-Thought analysis as reward component.
 
     Returns:
         SentinelReward with all components populated.
@@ -462,6 +465,21 @@ def compute_sentinel_reward(
     # Since we compute full episode reward, we use milestones as the potential
     shaping_potential = milestones_achieved / 8.0  # normalized to [0, 1]
 
+    # --- Component 11: CoT reasoning quality (frontier signal) ---
+    # Rewards the QUALITY of thinking, not just decision correctness.
+    # Based on OpenAI/METR 2025 research on CoT monitoring for deception.
+    cot_bonus = 0.0
+    cot_metrics = {}
+    if completion_text:
+        try:
+            from sentinel.cot_monitor import analyze_cot, cot_reward_bonus
+            cot_analysis = analyze_cot(completion_text, final_decision=None)
+            cot_bonus = cot_reward_bonus(cot_analysis)
+            total_score = max(0.0, min(1.0, total_score + cot_bonus))
+            cot_metrics = cot_analysis.to_metrics()
+        except Exception as exc:
+            logger.debug("CoT analysis skipped: %s", exc)
+
     breakdown = {
         "true_positive_catch":   round(tp_rate, 4),
         "pre_execution_timing":  round(pre_exec, 4),
@@ -488,6 +506,8 @@ def compute_sentinel_reward(
         "terminal_bonus":        round(terminal_bonus, 4),
         "shaping_potential":     round(shaping_potential, 4),
         "milestones_achieved":   int(milestones_achieved),
+        "cot_bonus":             round(cot_bonus, 4),
+        **{k: round(v, 4) for k, v in cot_metrics.items()},
         "total":                 round(total_score, 4),
     }
 

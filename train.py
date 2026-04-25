@@ -11,13 +11,13 @@ HOW TO RUN:
     USE_UNSLOTH=1 python train.py
 
     # Override model and steps:
-    MODEL_NAME=unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit TRAIN_STEPS=200 python train.py
+    MODEL_NAME=unsloth/Qwen3-30B-A3B-bnb-4bit TRAIN_STEPS=200 python train.py
 
     # Resume from checkpoint:
     RESUME_FROM=outputs/checkpoints/checkpoint-100 python train.py
 
 ENV VARS:
-    MODEL_NAME      HuggingFace model ID (default: unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit)
+    MODEL_NAME      HuggingFace model ID (default: unsloth/Qwen3-30B-A3B-bnb-4bit)
     HF_TOKEN        HuggingFace token (for gated models)
     GROQ_API_KEY    Groq API key (for LLM judge panel, optional)
     WANDB_PROJECT   W&B project name (optional, set to "" to disable)
@@ -106,13 +106,13 @@ from training.episodes import (
 )
 from training.curriculum import CURRICULUM_FRONTIER_FAILURE_RATE
 
-MODEL_NAME      = os.getenv("MODEL_NAME", "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit")
+MODEL_NAME      = os.getenv("MODEL_NAME", "unsloth/Qwen3-30B-A3B-bnb-4bit")
 HF_TOKEN        = os.getenv("HF_TOKEN", "")
 GROQ_API_KEY    = os.getenv("GROQ_API_KEY", "")
 WANDB_PROJECT   = os.getenv("WANDB_PROJECT", "").strip()
 TRAIN_STEPS     = int(os.getenv("TRAIN_STEPS", "200"))
 NUM_GENERATIONS = int(os.getenv("NUM_GENERATIONS", "4"))
-USE_UNSLOTH     = os.getenv("USE_UNSLOTH", "0") == "1"
+USE_UNSLOTH     = os.getenv("USE_UNSLOTH", "1") == "1"
 RESUME_FROM     = os.getenv("RESUME_FROM", "")
 OUTPUT_DIR      = os.getenv("OUTPUT_DIR", "outputs/checkpoints")
 LR              = float(os.getenv("LR", "5e-6"))
@@ -143,7 +143,8 @@ WARM_START_ONLY = os.getenv("WARM_START_ONLY", "0") == "1"
 ROLLOUT_AUDIT_DIR = os.getenv("ROLLOUT_AUDIT_DIR", os.path.join(TRAIN_MONITOR_DIR, "rollout_audits"))
 ROLLOUT_AUDIT_EVERY = int(os.getenv("ROLLOUT_AUDIT_EVERY", "10"))
 ROLLOUT_AUDIT_SAMPLES = int(os.getenv("ROLLOUT_AUDIT_SAMPLES", "2"))
-REWARD_SCHEDULE_MODE = os.getenv("REWARD_SCHEDULE_MODE", "dynamic")
+REWARD_SCHEDULE_MODE = os.getenv("REWARD_SCHEDULE_MODE", os.getenv("REWARD_PROFILE", "dynamic"))
+MODEL_STEPS_LIMIT = int(os.getenv("MODEL_STEPS_LIMIT", "1"))
 KL_TARGET = float(os.getenv("KL_TARGET", "0.08"))
 KL_ADAPTIVE = os.getenv("KL_ADAPTIVE", "1") == "1"
 KL_LOW_FACTOR = float(os.getenv("KL_LOW_FACTOR", "1.5"))
@@ -169,6 +170,24 @@ SENTINEL_TASK_IDS = [
     "adversarial_worker",
     "multi_crisis_command",
 ]
+
+
+def _parse_task_filter(env_name: str, allowed: List[str]) -> List[str]:
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return list(allowed)
+    selected = [part.strip() for part in raw.split(",") if part.strip()]
+    unknown = [task_id for task_id in selected if task_id not in allowed]
+    if unknown:
+        raise ValueError(
+            f"{env_name} contains unknown task id(s): {unknown}. "
+            f"Allowed: {allowed}"
+        )
+    return selected or list(allowed)
+
+
+TASK_IDS = _parse_task_filter("IRT_TASKS", TASK_IDS)
+SENTINEL_TASK_IDS = _parse_task_filter("SENTINEL_TASKS", SENTINEL_TASK_IDS)
 
 # Select task set based on USE_SENTINEL flag
 ACTIVE_TASK_IDS = SENTINEL_TASK_IDS if USE_SENTINEL else TASK_IDS
@@ -275,13 +294,19 @@ if wandb_enabled:
 # ---------------------------------------------------------------------------
 
 def load_model_and_tokenizer():
-    """Load model + tokenizer. Uses Unsloth if USE_UNSLOTH=1, else standard HF."""
+    """Load model + tokenizer. Uses Unsloth if USE_UNSLOTH=1, else standard HF.
+
+    When Unsloth is enabled:
+      - 12x faster MoE training via Triton kernels (torch._grouped_mm)
+      - 3x faster inference via fused attention (FastLanguageModel.for_inference)
+      - >35% less VRAM via 4-bit quantization + gradient checkpointing
+    """
     if USE_UNSLOTH:
         logger.info("Loading model with Unsloth: %s", MODEL_NAME)
         from unsloth import FastLanguageModel
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name           = MODEL_NAME,
-            max_seq_length       = 2048,
+            max_seq_length       = 4096,
             dtype                = None,
             load_in_4bit         = True,
             token                = HF_TOKEN or None,
@@ -297,6 +322,15 @@ def load_model_and_tokenizer():
             use_gradient_checkpointing   = "unsloth",
             random_state                 = 42,
         )
+        # Enable Unsloth fast inference (2-3x speedup for generation)
+        # GRPOTrainer internally handles train/eval mode toggling, but
+        # setting this up front ensures optimized attention kernels are
+        # compiled and ready for the first rollout batch.
+        try:
+            FastLanguageModel.for_inference(model)
+            logger.info("Unsloth fast inference enabled (fused attention kernels)")
+        except Exception as exc:
+            logger.warning("Unsloth fast inference setup skipped: %s", exc)
     else:
         logger.info("Loading model with standard HF: %s", MODEL_NAME)
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -383,7 +417,10 @@ def _sentinel_obs_to_prompt(obs, task_id, memory_context=""):
 
 # Episode execution
 def run_episode_with_completion(completion_text, task_id, variant_seed):
-    return _run_episode_with_completion_impl(completion_text, task_id, variant_seed, SENTINEL_TASK_IDS)
+    return _run_episode_with_completion_impl(
+        completion_text, task_id, variant_seed, SENTINEL_TASK_IDS,
+        model_steps_limit=MODEL_STEPS_LIMIT,
+    )
 
 def grpo_reward_fn(prompts, completions, **kwargs):
     return _grpo_reward_fn_impl(
@@ -393,6 +430,7 @@ def grpo_reward_fn(prompts, completions, **kwargs):
         use_llm_panel=USE_LLM_PANEL,
         groq_api_key=GROQ_API_KEY,
         wandb_enabled=wandb_enabled,
+        model_steps_limit=MODEL_STEPS_LIMIT,
         **kwargs,
     )
 

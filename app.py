@@ -155,6 +155,32 @@ except Exception as exc:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
+# MCP Server — Model Context Protocol (step/state/done as MCP tools)
+# ---------------------------------------------------------------------------
+MCP_AVAILABLE = False
+try:
+    from server.mcp_server import mcp_router
+    app.include_router(mcp_router, prefix="/mcp")
+    MCP_AVAILABLE = True
+    _log.info("MCP server mounted at /mcp (Streamable HTTP transport)")
+except Exception as exc:  # pragma: no cover
+    _log.warning("MCP server unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# A2A Protocol — Agent-to-Agent discovery and task handling
+# ---------------------------------------------------------------------------
+A2A_AVAILABLE = False
+try:
+    from server.a2a_server import a2a_router
+    app.include_router(a2a_router)
+    A2A_AVAILABLE = True
+    _log.info("A2A agent card at /.well-known/agent.json, endpoint at /a2a")
+except Exception as exc:  # pragma: no cover
+    _log.warning("A2A protocol unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Root-level endpoints (health checks)
 # ---------------------------------------------------------------------------
 
@@ -165,6 +191,10 @@ async def health_check():
         "status": "healthy",
         "native_openenv_available": NATIVE_OPENENV_AVAILABLE,
         "native_openenv_mount": "/openenv" if NATIVE_OPENENV_AVAILABLE else None,
+        "mcp_available": MCP_AVAILABLE,
+        "mcp_endpoint": "/mcp" if MCP_AVAILABLE else None,
+        "a2a_available": A2A_AVAILABLE,
+        "a2a_agent_card": "/.well-known/agent.json" if A2A_AVAILABLE else None,
     }
 
 
@@ -179,6 +209,16 @@ async def health():
         "primary_theme": "multi-agent interactions",
         "native_openenv_available": NATIVE_OPENENV_AVAILABLE,
         "native_openenv_mount": "/openenv" if NATIVE_OPENENV_AVAILABLE else None,
+        "mcp_available": MCP_AVAILABLE,
+        "mcp_endpoint": "/mcp" if MCP_AVAILABLE else None,
+        "a2a_available": A2A_AVAILABLE,
+        "a2a_agent_card": "/.well-known/agent.json" if A2A_AVAILABLE else None,
+        "protocols": {
+            "http_rest": True,
+            "openenv_native": NATIVE_OPENENV_AVAILABLE,
+            "mcp": MCP_AVAILABLE,
+            "a2a": A2A_AVAILABLE,
+        },
         "active_sessions": len(_SESSION_REGISTRY),
         "ws_active_connections": _deps.WS_ACTIVE_CONNECTIONS,
         "telemetry": _TELEMETRY,

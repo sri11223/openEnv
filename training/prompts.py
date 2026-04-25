@@ -361,17 +361,70 @@ class AdaptivePromptState:
 # ---------------------------------------------------------------------------
 
 class AdaptivePromptDataset(TorchDataset):
-    """Dynamic prompt dataset that re-reads curriculum and memory on each sample."""
+    """Dynamic prompt dataset that re-reads curriculum and memory on each sample.
 
-    def __init__(self, state: AdaptivePromptState, total_samples: int) -> None:
+    DDP-safe: when running under ``torch.distributed``, each rank receives a
+    deterministic, non-overlapping slice of the sample index space.  This
+    avoids duplicate samples across ranks without requiring a custom Sampler.
+    """
+
+    def __init__(
+        self,
+        state: AdaptivePromptState,
+        total_samples: int,
+        rank: Optional[int] = None,
+        world_size: Optional[int] = None,
+        seed: int = 42,
+    ) -> None:
         self._state = state
         self._total_samples = max(1, total_samples)
+        self._seed = seed
+
+        # Auto-detect DDP rank/world_size if not explicitly passed
+        if rank is None or world_size is None:
+            try:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    self._rank = dist.get_rank()
+                    self._world_size = dist.get_world_size()
+                else:
+                    self._rank = rank or 0
+                    self._world_size = world_size or 1
+            except Exception:
+                self._rank = rank or 0
+                self._world_size = world_size or 1
+        else:
+            self._rank = rank
+            self._world_size = world_size
+
+        # Offset the internal counter so each rank draws from a different
+        # slice of the prompt space, guaranteeing no duplicate work.
+        self._state.sample_counter = self._rank
 
     def __len__(self) -> int:
         return self._total_samples
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
+        # Deterministic per-rank offset: each rank steps by world_size so
+        # indices are interleaved (rank 0 → 0,2,4,…  rank 1 → 1,3,5,…).
+        effective_index = index * self._world_size + self._rank
+        # Ensure the state counter is deterministic for this global index
+        self._state.sample_counter = effective_index
         return self._state.next_prompt_record()
+
+    @staticmethod
+    def worker_init_fn(worker_id: int) -> None:
+        """DataLoader ``worker_init_fn`` for multi-process data loading.
+
+        Seeds numpy/random per-worker so that each DataLoader worker generates
+        distinct prompts.  Pass as ``worker_init_fn=AdaptivePromptDataset.worker_init_fn``
+        when constructing the DataLoader.
+        """
+        import random
+        import numpy as np
+        seed = torch.initial_seed() % (2**32) + worker_id
+        np.random.seed(seed)
+        random.seed(seed)
 
 
 class WarmStartDataset(TorchDataset):
