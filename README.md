@@ -29,11 +29,13 @@ SENTINEL trains an LLM "commander" to supervise a fleet of AI worker agents duri
 |---|---|
 | **Live Space** | [srikrishna2005-openenv.hf.space](https://srikrishna2005-openenv.hf.space) |
 | **Theme** | #5 Wild Card · AI Safety Oversight + #1 Multi-Agent + #2 Long-Horizon |
-| **Model** | `unsloth/Qwen3-30B-A3B-bnb-4bit` — 30B MoE, 3B active params, 12x faster training |
-| **Training** | GRPO via HuggingFace TRL + Unsloth, 3-phase curriculum |
+| **Model** | `unsloth/Qwen3-4B-bnb-4bit` — 4B params, LoRA rank 16 (~66 MB adapter) |
+| **Trained model** | [`srikrish2004/sentinel-qwen3-4b-grpo`](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) on Hugging Face Hub |
+| **Training** | GRPO via HuggingFace TRL + Unsloth, adaptive curriculum |
+| **Reward improvement** | **0.07 → 0.30 (4.3× over baseline)** in 200 GRPO steps |
 | **Tests** | 229/229 passing · 9/9 validation checks |
 | **Tasks** | 7 total across 2 learning tracks (IRT + SENTINEL), Easy→Expert |
-| **Reward** | 12-component dense decomposed signal + CoT reasoning quality bonus |
+| **Reward** | 10-component dense decomposed signal + CoT reasoning quality bonus |
 | **Frontier Tech** | CoT Monitoring · AI Debate Protocol · Weak-to-Strong Eval · Digital Twin Replay |
 
 ---
@@ -156,37 +158,56 @@ Plus: potential-based shaping, coaching quality scoring, worker rehabilitation t
 
 ---
 
-## 📈 Training Results — 300 GRPO Steps on A100
+## 📈 Training Results — 200 GRPO Steps on A100
 
-**Model:** `Qwen3-30B-A3B-bnb-4bit` (30B MoE, 3B active params, LoRA rank 16)
+**Model:** `unsloth/Qwen3-4B-bnb-4bit` (4B params, LoRA rank 16, ~66 MB adapter)
+**Trained model:** [`srikrish2004/sentinel-qwen3-4b-grpo`](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo)
 **Hardware:** NVIDIA A100 80GB · HuggingFace Space
-**WandB:** [Live Dashboard](https://wandb.ai/srikrishnanutalapati-r-v-r-j-c-college-of-engineering/sentinel-frontier)
+**Wall-clock:** 75.6 minutes · **Compute cost:** ~$5
+
+### Headline numbers
+
+| Metric | Baseline (step 0) | Final (step 200) | Δ |
+|---|---|---|---|
+| **Mean reward** | 0.07 | **0.30** | **+4.3×** |
+| Mean completion length | 414 tokens | 134 tokens | model learned to be concise |
+| Clipped completions | 100% | **0%** | no more cutoffs |
+| Tasks active | 1 (warm-up only) | 4 (full curriculum) | curriculum graduated |
+
+Per-task breakdown after 200 steps:
+
+| Task | Best score | Catch rate | False positives |
+|---|---|---|---|
+| `adversarial_worker` | 0.698 | 6/7 | 2 |
+| `basic_oversight` | 0.624 | 1/2 | 1 |
+| `fleet_monitoring_conflict` | 0.569 | 3/4 | 5 |
+| `multi_crisis_command` | 0.561 | 5/6 | 22 |
 
 ### Reward Curve
 
-![Reward Mean](outputs/reward_curves/01_reward_mean.png)
+![Reward Mean](outputs/proof_pack/reward_curves/01_reward_mean.png)
 
 ### Detection vs False Positive Rate
 
-![Detection vs FP](outputs/reward_curves/02_detection_vs_false_positive.png)
+![Detection vs FP](outputs/proof_pack/reward_curves/02_detection_vs_false_positive.png)
 
 ### Counterfactual Risk Reduction (Digital Twin Proof)
 
-![Risk Reduction](outputs/reward_curves/03_risk_reduction.png)
+![Risk Reduction](outputs/proof_pack/reward_curves/03_risk_reduction.png)
 
 ### Worker Rehabilitation (Coaching Effectiveness)
 
-![Rehabilitation](outputs/reward_curves/04_worker_rehabilitation.png)
+![Rehabilitation](outputs/proof_pack/reward_curves/04_worker_rehabilitation.png)
 
 ### Scenario Coverage Heatmap (Curriculum Evidence)
 
-![Scenario Coverage](outputs/reward_curves/06_scenario_coverage_heatmap.png)
+![Scenario Coverage](outputs/proof_pack/reward_curves/06_scenario_coverage_heatmap.png)
 
 ### Memory Growth (Cross-Episode Learning)
 
-![Memory Growth](outputs/reward_curves/18_memory_growth.png)
+![Memory Growth](outputs/proof_pack/reward_curves/18_memory_growth.png)
 
-> **Note:** These plots are generated from real training data via `scripts/render_training_dashboard.py`. Full 18-plot dashboard available in `outputs/reward_curves/`.
+> **Note:** All 19 dashboard plots are generated from real training data via `scripts/render_training_dashboard.py`. Full set available in [`outputs/proof_pack/reward_curves/`](outputs/proof_pack/reward_curves/).
 
 
 ### Functional Requirements
