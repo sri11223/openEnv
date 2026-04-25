@@ -50,20 +50,30 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
-from torch.utils.data import Dataset as TorchDataset
+try:
+    import torch
+    from torch.utils.data import Dataset as TorchDataset
+except ModuleNotFoundError:
+    torch = None
+
+    class TorchDataset:  # type: ignore[no-redef]
+        """Fallback base for tests that import train.py without training deps."""
+
+        pass
 
 # bnb-4bit pre-quantized models have compute_dtype=float16 baked in, so LoRA
 # adapter parameters and their gradients are FP16. PyTorch 2.10 added a strict
 # check in GradScaler._unscale_grads_ that rejects FP16 gradients (intended for
 # full-precision training where FP16 grads indicate a misconfiguration). For
 # bnb-4bit + LoRA this check is a false positive — patch it out.
-import torch.amp.grad_scaler as _gs
-_orig_unscale_grads = _gs.GradScaler._unscale_grads_
-def _allow_fp16_unscale(self, optimizer, inv_scale, found_inf, allow_fp16):
-    return _orig_unscale_grads(self, optimizer, inv_scale, found_inf, True)
-_gs.GradScaler._unscale_grads_ = _allow_fp16_unscale
-from transformers import TrainerCallback
+if torch is not None:
+    import torch.amp.grad_scaler as _gs
+    _orig_unscale_grads = _gs.GradScaler._unscale_grads_
+
+    def _allow_fp16_unscale(self, optimizer, inv_scale, found_inf, allow_fp16):
+        return _orig_unscale_grads(self, optimizer, inv_scale, found_inf, True)
+
+    _gs.GradScaler._unscale_grads_ = _allow_fp16_unscale
 
 # Re-export from extracted modules for backward compatibility
 from training.metrics import (
@@ -228,7 +238,7 @@ def _package_version(name: str) -> str:
 
 
 def collect_training_stack_versions() -> Dict[str, Any]:
-    cuda_available = torch.cuda.is_available()
+    cuda_available = bool(torch is not None and torch.cuda.is_available())
     return {
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -264,7 +274,7 @@ def collect_training_stack_versions() -> Dict[str, Any]:
             "hard_stop_mult": KL_HARD_STOP_MULT,
         },
         "packages": {
-            "torch": getattr(torch, "__version__", "missing"),
+            "torch": getattr(torch, "__version__", "missing") if torch is not None else "missing",
             "bitsandbytes": _package_version("bitsandbytes"),
             "transformers": _package_version("transformers"),
             "peft": _package_version("peft"),
@@ -314,6 +324,11 @@ def load_model_and_tokenizer():
       - 3x faster inference via fused attention (FastLanguageModel.for_inference)
       - >35% less VRAM via 4-bit quantization + gradient checkpointing
     """
+    if torch is None:
+        raise ImportError(
+            "Training requires torch. Install the training extras before running train.py."
+        )
+
     if USE_UNSLOTH:
         logger.info("Loading model with Unsloth: %s", MODEL_NAME)
         from unsloth import FastLanguageModel

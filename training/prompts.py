@@ -11,8 +11,16 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
-from torch.utils.data import Dataset as TorchDataset
+try:
+    import torch
+    from torch.utils.data import Dataset as TorchDataset
+except ModuleNotFoundError:
+    torch = None
+
+    class TorchDataset:  # type: ignore[no-redef]
+        """Fallback base for tests that do not instantiate torch datasets."""
+
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +430,8 @@ class AdaptivePromptDataset(TorchDataset):
         distinct prompts.  Pass as ``worker_init_fn=AdaptivePromptDataset.worker_init_fn``
         when constructing the DataLoader.
         """
+        if torch is None:
+            raise ImportError("AdaptivePromptDataset.worker_init_fn requires torch")
         import random
         import numpy as np
         seed = torch.initial_seed() % (2**32) + worker_id
@@ -433,6 +443,8 @@ class WarmStartDataset(TorchDataset):
     """Simple causal-LM dataset for a short formatting/behavior warm-start."""
 
     def __init__(self, texts: List[str], tokenizer, max_length: int = 1536) -> None:
+        if torch is None:
+            raise ImportError("WarmStartDataset requires torch")
         self.examples: List[Dict[str, torch.Tensor]] = []
         for text in texts:
             encoded = tokenizer(

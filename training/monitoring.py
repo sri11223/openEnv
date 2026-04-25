@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from transformers import TrainerCallback
+
+try:
+    from transformers import TrainerCallback
+except ModuleNotFoundError:
+    class TrainerCallback:  # type: ignore[no-redef]
+        """Lightweight fallback so monitoring helpers are importable in lean CI."""
+
+        pass
 
 from training.metrics import safe_ratio, aggregate_batch_metrics, summarize_sentinel_history
 

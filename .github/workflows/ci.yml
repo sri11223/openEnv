@@ -52,6 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install E2E client dependencies
+        run: python3 -m pip install --user httpx==0.28.1
+
       - name: Build Docker image
         run: docker build -t sentinel-oversight-command:ci .
 
