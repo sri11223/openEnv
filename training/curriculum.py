@@ -321,8 +321,6 @@ class CurriculumController:
         }
 
     def _eligible_scenarios(self) -> List[Tuple[str, int]]:
-        # When CURRICULUM_OPEN_WINDOW=1, skip the tier difficulty cap so that
-        # every active task is reachable regardless of current tier_index.
         open_window = os.getenv("CURRICULUM_OPEN_WINDOW", "0") == "1"
         max_diff = DIFFICULTY_TIERS[self._state.tier_index]["max_diff"]
         eligible: List[Tuple[str, int]] = []
@@ -336,13 +334,17 @@ class CurriculumController:
             if windowed:
                 eligible.extend(windowed)
                 continue
-            if open_window:
-                # All variants are in the window but the window itself was
-                # empty (task has no scenarios at all) — skip.
-                continue
+            # No windowed scenarios passed the filter. Try the hardest
+            # scenario still at or below the tier cap.
             fallback = self._fallback_scenario_for_task(task_id, max_diff=max_diff)
             if fallback is not None:
                 eligible.append(fallback)
+                continue
+            # Task sits entirely above the current tier cap. Always include its
+            # easiest scenario so every active task gets training exposure.
+            task_scenarios = TASK_SCENARIOS_BY_DIFFICULTY.get(task_id, [])
+            if task_scenarios:
+                eligible.append(task_scenarios[0])
         return eligible
 
     def _recent_mean_score(self, window: int = 20) -> float:
