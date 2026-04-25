@@ -154,6 +154,39 @@ Dense, per-step, decomposed rewards — not binary end-of-episode:
 
 Plus: potential-based shaping, coaching quality scoring, worker rehabilitation tracking.
 
+---
+
+## 📈 Training Results — 300 GRPO Steps on A100
+
+**Model:** `Qwen3-30B-A3B-bnb-4bit` (30B MoE, 3B active params, LoRA rank 16)
+**Hardware:** NVIDIA A100 80GB · HuggingFace Space
+**WandB:** [Live Dashboard](https://wandb.ai/srikrishnanutalapati-r-v-r-j-c-college-of-engineering/sentinel-frontier)
+
+### Reward Curve
+
+![Reward Mean](outputs/reward_curves/01_reward_mean.png)
+
+### Detection vs False Positive Rate
+
+![Detection vs FP](outputs/reward_curves/02_detection_vs_false_positive.png)
+
+### Counterfactual Risk Reduction (Digital Twin Proof)
+
+![Risk Reduction](outputs/reward_curves/03_risk_reduction.png)
+
+### Worker Rehabilitation (Coaching Effectiveness)
+
+![Rehabilitation](outputs/reward_curves/04_worker_rehabilitation.png)
+
+### Scenario Coverage Heatmap (Curriculum Evidence)
+
+![Scenario Coverage](outputs/reward_curves/06_scenario_coverage_heatmap.png)
+
+### Memory Growth (Cross-Episode Learning)
+
+![Memory Growth](outputs/reward_curves/18_memory_growth.png)
+
+> **Note:** These plots are generated from real training data via `scripts/render_training_dashboard.py`. Full 18-plot dashboard available in `outputs/reward_curves/`.
 
 
 ### Functional Requirements

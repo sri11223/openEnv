@@ -9,7 +9,11 @@ build/
 .env
 *.log
 .qodo/
-outputs/
+
+# ── Training artifacts (large) — never push ──
+outputs/checkpoints/
+outputs/warm_start/
+wandb/
 
 # ── Local strategy / reference docs — never push ──
 winner_analysis/

@@ -606,8 +606,7 @@ def train():
         per_device_train_batch_size = 1,
         gradient_accumulation_steps = max(1, 8 // NUM_GENERATIONS),
         num_generations             = NUM_GENERATIONS,
-        max_new_tokens              = MAX_NEW_TOKENS,
-        temperature                 = 0.8,        # diversity in rollouts
+        max_completion_length       = MAX_NEW_TOKENS,
         learning_rate               = LR,
         kl_coef                     = KL_COEF,
         logging_steps               = 1,
@@ -620,6 +619,7 @@ def train():
         report_to                   = "wandb" if wandb_enabled else "none",
         max_steps                   = TRAIN_STEPS,
     )
+
 
     # Wrap reward fn to inject curriculum-selected task_ids and seeds
     def reward_fn_with_curriculum(prompts, completions, **kwargs):
