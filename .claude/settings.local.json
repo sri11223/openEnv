@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//data/**)",
-      "Read(//data/sentinel_outputs/**)"
-    ]
-  }
-}
