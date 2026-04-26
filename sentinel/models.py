@@ -380,6 +380,32 @@ class SentinelDecision(BaseModel):
         reason = normalized.get("reason")
         if isinstance(reason, str) and reason.lower() in {"", "safe", "none", "null"}:
             normalized["reason"] = None
+        redirect_action = normalized.get("redirect_action")
+        if isinstance(redirect_action, str):
+            action_type = redirect_action.strip().lower()
+            if action_type in {"", "none", "null"}:
+                normalized["redirect_action"] = None
+            else:
+                suggested_parameters = normalized.get("suggested_parameters")
+                if not isinstance(suggested_parameters, dict):
+                    suggested_parameters = {}
+                normalized["redirect_action"] = {
+                    "action_type": action_type,
+                    "target": normalized.get("suggested_target"),
+                    "parameters": suggested_parameters,
+                    "reasoning": normalized.get("worker_message") or normalized.get("explanation", ""),
+                }
+                normalized.setdefault("suggested_action_type", action_type)
+        elif redirect_action is not None and not isinstance(redirect_action, dict):
+            normalized["redirect_action"] = None
+        if not isinstance(normalized.get("suggested_parameters", {}), dict):
+            normalized["suggested_parameters"] = {}
+        for list_key in ("required_evidence", "constitutional_violations"):
+            value = normalized.get(list_key)
+            if isinstance(value, str):
+                normalized[list_key] = [value] if value.strip() else []
+            elif value is not None and not isinstance(value, list):
+                normalized[list_key] = []
         return normalized
 
 

@@ -167,6 +167,26 @@ def test_sentinel_env_step_redirect():
     assert result.done in [True, False]
 
 
+def test_sentinel_env_redirect_action_string_is_normalized():
+    """Model shorthand redirect_action strings should not crash validation."""
+    env = SentinelEnv()
+    env.reset("basic_oversight", variant_seed=0)
+
+    decision = {
+        "decision": "REDIRECT",
+        "reason": "destructive_precedence",
+        "explanation": "Investigate first instead of jumping to remediation.",
+        "redirect_action": "investigate",
+        "suggested_target": "auth-service",
+        "suggested_parameters": {"source": "eval"},
+    }
+
+    result = env.step(decision)
+
+    assert result.observation is not None
+    assert env._audit_log[-1].redirect_action["action_type"] == "investigate"
+
+
 def test_sentinel_env_step_reassign():
     """Test SENTINEL step with REASSIGN decision."""
     env = SentinelEnv()
