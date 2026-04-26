@@ -23,8 +23,9 @@ tags:
 | | |
 |---|---|
 | Live Space | [srikrishna2005/openenv](https://huggingface.co/spaces/srikrishna2005/openenv) |
+| GitHub repo | [sri11223/openEnv](https://github.com/sri11223/openEnv) |
 | Trained model | [srikrish2004/sentinel-qwen3-4b-grpo](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) |
-| Phase 2 training (Kaggle) | [notebook09bf5fe891](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891) |
+| Phase 2 training (Kaggle) | [notebook7a0fc4f33f](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f) |
 | HF Blog post | [docs/sentinel/hf_blog_post.md](docs/sentinel/hf_blog_post.md) |
 | HF Model card | [hf_model_card.md](hf_model_card.md) |
 | Deep story | [docs/sentinel/sentinel-story-frame.md](docs/sentinel/sentinel-story-frame.md) |
@@ -545,7 +546,7 @@ When frontier hit rate exceeds 0.75 on a task, the task difficulty advances. Whe
 - Effect: the 40 kept episodes had mean FP = 1.5 vs 7.0 overall — a precision-targeted fine-tuning pass
 
 **Phase 2 — 140 extra GRPO steps on Kaggle T4x2:**
-- [Kaggle notebook →](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891)
+- [Kaggle notebook →](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)
 - Hardware: Kaggle T4 x2 GPU (free tier)
 - Duration: **9+ hours** of actual training wall time
 - Failed runs before this one: **6**. OOM on the first attempt. Import errors on the second. KL explosion on the third. Wrong checkpoint path on the fourth and fifth. Silent zero-reward loop on the sixth. The seventh run completed.
@@ -834,7 +835,9 @@ Goal: improve precision. Phase 1 learned to catch everything. RFT teaches SENTIN
 
 ### Phase 2 — Kaggle, 140 additional GRPO steps
 
-[→ Kaggle training notebook](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891)
+[→ Kaggle training notebook](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)
+
+Repo notebook for verification: [notebooks/sentinel_deep_eval.ipynb](notebooks/sentinel_deep_eval.ipynb) - run this notebook on Kaggle; it is not intended as a local CPU demo.
 
 140 additional GRPO steps targeting adversarial_worker and multi_crisis_command (the tasks with the highest FP rates). Focus: reduce over-blocking on complex scenarios while maintaining catch rate.
 
@@ -936,7 +939,7 @@ python scripts/render_training_dashboard.py \
 | **A2A agent card** | [/.well-known/agent.json](https://srikrishna2005-openenv.hf.space/.well-known/agent.json) |
 | **Trained model** | [srikrish2004/sentinel-qwen3-4b-grpo](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) |
 | **GitHub** | [sri11223/openEnv](https://github.com/sri11223/openEnv) |
-| **Phase 2 Kaggle** | [notebook09bf5fe891](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891) |
+| **Phase 2 Kaggle** | [notebook7a0fc4f33f](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f) |
 
 ### Live Agent Oversight: The Fastest Way To See SENTINEL
 
@@ -1216,7 +1219,7 @@ Start with these two for the full picture:
 | [HF Blog Post](docs/sentinel/hf_blog_post.md) | docs/sentinel/ | publish-ready narrative post with all results |
 | [HF Model Card](hf_model_card.md) | root | model card for srikrish2004/sentinel-qwen3-4b-grpo |
 | [Training trajectory](outputs/proof_pack/training_metrics.jsonl) | outputs/ | 255 real GRPO batches, 1.7 MB, every reward and detection metric |
-| [Phase 2 Kaggle notebook](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891) | Kaggle | 140 additional steps, 9+ hours, 6 failed runs before success |
+| [Phase 2 Kaggle notebook](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f) | Kaggle | 140 additional steps, 9+ hours, 6 failed runs before success |
 | [Trained model](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) | HuggingFace | LoRA adapter, tokenizer, adapter config |
 | [Live Space](https://huggingface.co/spaces/srikrishna2005/openenv) | HuggingFace | running environment with HTTP API |
 
