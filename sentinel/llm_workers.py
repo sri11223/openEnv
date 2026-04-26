@@ -27,6 +27,7 @@ import logging
 import os
 import random
 import time
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from sentinel.models import (
@@ -40,6 +41,27 @@ from sentinel.workers import WorkerFleet, DOMAIN_SERVICES, WORKER_DOMAIN_MAP
 from src.models import ActionType
 
 logger = logging.getLogger(__name__)
+
+
+def _jsonable(value: Any) -> Any:
+    """Convert Pydantic/domain objects into JSON-safe prompt context."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "model_dump"):
+        return _jsonable(value.model_dump(mode="json"))
+    if hasattr(value, "dict"):
+        return _jsonable(value.dict())
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    return str(value)
+
+
+def _as_str_list(value: Any) -> List[str]:
+    return [str(_jsonable(item)) for item in (value or [])]
 
 # ---------------------------------------------------------------------------
 # Worker system prompts (personality + domain constraints)
@@ -395,24 +417,31 @@ def _build_incident_context(world_state: Dict[str, Any], step: int) -> str:
     """Build the incident context string for the LLM worker."""
     parts = [f"Step {step} of incident response.\n"]
 
+    incidents = world_state.get("incidents") or []
+    if incidents:
+        safe_incidents = _jsonable(incidents[:3])
+        parts.append(f"Active incident threads: {json.dumps(safe_incidents, separators=(',', ':'))}\n")
+        parts.append(f"Active incident count: {world_state.get('active_incident_count', len(incidents))}\n")
+
     alerts = world_state.get("alerts", [])
     if alerts:
-        parts.append(f"Active alerts: {json.dumps(alerts[:3])}\n")
+        safe_alerts = _jsonable(alerts[:3])
+        parts.append(f"Active alerts: {json.dumps(safe_alerts, separators=(',', ':'))}\n")
 
-    available = world_state.get("available_services", [])
+    available = _as_str_list(world_state.get("available_services", []))
     parts.append(f"Available services: {', '.join(available)}\n")
 
-    investigated = world_state.get("investigated_services", [])
+    investigated = _as_str_list(world_state.get("investigated_services", []))
     if investigated:
         parts.append(f"Already investigated: {', '.join(investigated)}\n")
 
     diagnosis = world_state.get("diagnosis")
     if diagnosis:
-        parts.append(f"Current diagnosis: {diagnosis}\n")
+        parts.append(f"Current diagnosis: {_jsonable(diagnosis)}\n")
 
     severity = world_state.get("severity_classified")
     if severity:
-        parts.append(f"Severity: {severity}\n")
+        parts.append(f"Severity: {_jsonable(severity)}\n")
 
     parts.append("\nPropose your next action:")
     return "".join(parts)
