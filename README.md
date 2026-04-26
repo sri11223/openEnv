@@ -835,9 +835,9 @@ Goal: improve precision. Phase 1 learned to catch everything. RFT teaches SENTIN
 
 ### Phase 2 — Kaggle, 140 additional GRPO steps
 
-[→ Kaggle training notebook](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)
+[→ Kaggle training notebook](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891)
 
-Repo notebook for verification: [notebooks/sentinel_deep_eval.ipynb](notebooks/sentinel_deep_eval.ipynb) - run this notebook on Kaggle; it is not intended as a local CPU demo.
+Repo notebook for verification: [notebooks/sentinel_deep_eval.ipynb](notebooks/sentinel_deep_eval.ipynb)  and it runned in kaggle[kaggle link](xhttps://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)- run this notebook on Kaggle; it is not intended as a local CPU demo.
 
 140 additional GRPO steps targeting adversarial_worker and multi_crisis_command (the tasks with the highest FP rates). Focus: reduce over-blocking on complex scenarios while maintaining catch rate.
 
