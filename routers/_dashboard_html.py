@@ -14,7 +14,7 @@ SENTINEL_DASHBOARD_HTML = """\
 :root{--bg:#0b0d0f;--panel:#15191d;--panel2:#101418;--line:#2c333a;--text:#eef2f4;--muted:#96a0aa;--green:#2fb170;--yellow:#d8a634;--red:#e05d5d;--cyan:#55b7c8;--ink:#080a0c}
 body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;min-height:100vh}
 button,select,textarea,input{font:inherit}
-.shell{display:grid;grid-template-columns:310px 1fr;min-height:100vh}
+.shell{display:grid;grid-template-columns:330px 1fr;min-height:100vh}
 .rail{background:#0f1317;border-right:1px solid var(--line);padding:18px;position:sticky;top:0;height:100vh;overflow:auto}
 .main{padding:18px;display:grid;gap:14px}
 h1{font-size:24px;line-height:1.05;margin:0 0 6px}
@@ -23,6 +23,7 @@ h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}
 .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
 .triple{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.quad{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .metric{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:11px;min-height:78px}
 .metric b{display:block;font-size:24px;margin-top:5px}
@@ -53,7 +54,18 @@ button:hover{border-color:#59636e;background:#262e35}
 .mono{font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
 .feed{min-height:90px;max-height:190px;overflow:auto;display:grid;gap:7px}
 .feed div{background:#101418;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px}
-@media(max-width:960px){.shell{grid-template-columns:1fr}.rail{position:relative;height:auto}.grid,.triple{grid-template-columns:1fr}}
+.memory{display:grid;gap:8px;max-height:260px;overflow:auto}
+.memory div{background:#101418;border:1px solid var(--line);border-radius:7px;padding:9px;font-size:12px}
+.workerlist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.worker{background:#101418;border:1px solid var(--line);border-radius:7px;padding:10px}
+.worker.active{border-color:#326c4a}
+.worker.low{border-color:#7a3030}
+.worker b{display:block;margin-bottom:6px}
+.incident{background:#101418;border:1px solid var(--line);border-left:4px solid var(--cyan);border-radius:7px;padding:9px;font-size:12px}
+.backend{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px}
+.wide{grid-column:1 / -1}
+@media(max-width:1100px){.quad{grid-template-columns:repeat(2,1fr)}.workerlist{grid-template-columns:1fr}}
+@media(max-width:960px){.shell{grid-template-columns:1fr}.rail{position:relative;height:auto}.grid,.triple,.quad{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -63,11 +75,15 @@ button:hover{border-color:#59636e;background:#262e35}
     <p class="sub">Fleet oversight gate</p>
     <label>Task</label>
     <select id="task">
-      <option value="basic_oversight">Basic oversight</option>
-      <option value="fleet_monitoring_conflict">Fleet monitoring conflict</option>
-      <option value="adversarial_worker">Adversarial worker</option>
-      <option value="multi_crisis_command">Multi-crisis command</option>
+      <option value="basic_oversight">Basic oversight - 1 worker</option>
+      <option value="fleet_monitoring_conflict">Fleet conflict - 2 workers</option>
+      <option value="adversarial_worker" selected>Adversarial worker - 4 workers</option>
+      <option value="multi_crisis_command">Multi-crisis - 4 workers, 3 incidents</option>
     </select>
+    <div class="row" style="margin-top:8px">
+      <button onclick="presetTask('adversarial_worker')">4-worker stress</button>
+      <button onclick="presetTask('multi_crisis_command')">Control room</button>
+    </div>
     <label>Variant seed</label>
     <input id="seed" type="number" value="0">
     <div class="row" style="margin-top:12px">
@@ -99,14 +115,37 @@ button:hover{border-color:#59636e;background:#262e35}
       <button onclick="useRecommendation()">Use recommendation</button>
       <button class="primary" onclick="submitDecision()">Submit</button>
     </div>
-    <button class="warn" style="width:100%;margin-top:8px" onclick="autoRun()">Auto-run 6 steps</button>
+    <div class="row" style="margin-top:8px">
+      <button class="warn" onclick="autoRun(6)">Auto 6</button>
+      <button class="warn" onclick="autoRun(12)">Auto 12</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" onclick="autoRun('all')">Run episode</button>
+      <button class="danger" onclick="stopRun()">Stop</button>
+    </div>
+    <div class="backend" id="backendStatus">Backend: checking...</div>
     <p class="tiny" id="sessionLabel" style="margin-top:12px">No session</p>
   </aside>
   <main class="main">
-    <section class="triple">
+    <section class="quad">
       <div class="metric"><span class="tiny">Step</span><b id="stepMetric">0/0</b></div>
       <div class="metric"><span class="tiny">Reward</span><b id="rewardMetric">0.000</b></div>
       <div class="metric"><span class="tiny">Risk reduction</span><b id="riskMetric">0%</b></div>
+      <div class="metric"><span class="tiny">Worker backend</span><b id="backendMetric">rule</b></div>
+    </section>
+    <section class="triple">
+      <div class="panel">
+        <h2>Active Workers</h2>
+        <div id="workers" class="workerlist"></div>
+      </div>
+      <div class="panel">
+        <h2>Feedback Memory</h2>
+        <div id="memory" class="memory"></div>
+      </div>
+      <div class="panel">
+        <h2>Incident Threads</h2>
+        <div id="incidents" class="memory"></div>
+      </div>
     </section>
     <section class="grid">
       <div class="panel">
@@ -136,6 +175,7 @@ button:hover{border-color:#59636e;background:#262e35}
       <div class="panel">
         <h2>Event Feed</h2>
         <div id="feed" class="feed"></div>
+        <div id="loop" class="memory" style="margin-top:12px"></div>
         <div id="grade" style="margin-top:12px"></div>
       </div>
     </section>
@@ -145,11 +185,14 @@ button:hover{border-color:#59636e;background:#262e35}
 let sessionId = null;
 let lastObs = null;
 let running = false;
+let stopRequested = false;
+let healthInfo = {};
 
 function $(id){ return document.getElementById(id); }
 function esc(v){ return String(v == null ? "" : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
 function keys(obj){ return obj ? Object.keys(obj) : []; }
 function pct(v){ return Math.round((Number(v) || 0) * 100); }
+function list(v){ return Array.isArray(v) ? v : []; }
 
 async function api(path, options){
   options = options || {};
@@ -164,7 +207,28 @@ async function api(path, options){
   return res.json();
 }
 
+async function loadBackend(){
+  try{
+    healthInfo = await api("/health");
+    const backend = healthInfo.sentinel_worker_backend || "rule";
+    const configured = healthInfo.llm_worker_configured ? "key ready" : "no LLM key";
+    $("backendStatus").textContent = "Backend: " + backend + " (" + configured + ")";
+    $("backendMetric").textContent = backend;
+  } catch(err){
+    $("backendStatus").textContent = "Backend: unavailable";
+  }
+}
+
+async function presetTask(task){
+  $("task").value = task;
+  sessionId = null;
+  lastObs = null;
+  await resetEpisode();
+}
+
 async function resetEpisode(){
+  stopRequested = false;
+  await loadBackend();
   const body = {
     task_id: $("task").value,
     variant_seed: Number($("seed").value || 0),
@@ -190,7 +254,9 @@ async function submitDecision(){
   };
   const data = await api("/sentinel/step", {method:"POST", body:JSON.stringify(body)});
   lastObs = data.observation;
+  const p = data.observation?.proposed_action || {};
   log(data.info.was_tp ? "Caught " + data.info.mb_type : data.info.was_fn ? "Missed " + data.info.mb_type : "Decision " + body.decision);
+  if(p.worker_id) log("Next proposal from " + p.worker_id + " -> " + p.action_type + " " + (p.target || ""));
   render(lastObs, data);
   useRecommendation();
   if(data.done){ await gradeEpisode(); }
@@ -204,17 +270,28 @@ async function gradeEpisode(){
   log("Grade " + (data.score * 100).toFixed(1) + "%");
 }
 
-async function autoRun(){
+function stopRun(){
+  stopRequested = true;
+  log("Auto-run stop requested");
+}
+
+async function autoRun(limit){
   if(running) return;
   running = true;
+  stopRequested = false;
   try{
     if(!sessionId || !lastObs) await resetEpisode();
-    for(let i=0;i<6;i++){
-      if(!lastObs) break;
+    let remaining = Math.max(1, Number(lastObs.max_steps || 1) - Number(lastObs.step_number || 0));
+    let steps = limit === "all" ? remaining : Number(limit || 6);
+    log("Auto-run started: " + steps + " step" + (steps === 1 ? "" : "s"));
+    for(let i=0;i<steps;i++){
+      if(!lastObs || stopRequested) break;
+      if(Number(lastObs.step_number || 0) >= Number(lastObs.max_steps || 0)) break;
       useRecommendation();
       await submitDecision();
-      await new Promise(r => setTimeout(r, 250));
+      await new Promise(r => setTimeout(r, 120));
     }
+    if(stopRequested) log("Auto-run stopped");
   } finally {
     running = false;
   }
@@ -261,22 +338,99 @@ function render(obs, stepData){
   $("sessionLabel").textContent = sessionId ? "Session " + sessionId.slice(0, 8) : "No session";
   $("stepMetric").textContent = `${obs.step_number || 0}/${obs.max_steps || 0}`;
   $("rewardMetric").textContent = Number((stepData || {}).info?.cumulative_reward || 0).toFixed(3);
+  $("backendMetric").textContent = healthInfo.sentinel_worker_backend || "rule";
+  renderWorkers(obs);
+  renderMemory(obs.feedback_memory_summary || {});
+  renderIncidents(obs);
   renderProposal(obs);
   renderConstitution(obs.constitutional_assessment || {});
   renderTrust(obs.worker_track_records || {});
   renderLedger(obs, stepData);
   renderAudit(obs.recent_decisions || []);
+  renderLoop(stepData);
 }
 
 function renderProposal(obs){
   const p = obs.proposed_action || {};
+  const source = String(p.proposal_id || "").startsWith("llm_") ? "Groq LLM worker" : "scheduled benchmark worker";
   $("proposal").innerHTML = `
     <span>Worker</span><b>${esc(p.worker_id)}</b>
+    <span>Source</span><span class="pill ${source.indexOf("Groq") >= 0 ? "ok" : "warn"}">${esc(source)}</span>
     <span>Action</span><b>${esc(p.action_type)}</b>
     <span>Target</span><b>${esc(p.target || "N/A")}</b>
+    <span>Incident</span><b>${esc(p.incident_label || p.incident_id || "default")}</b>
     <span>Params</span><code class="mono">${esc(JSON.stringify(p.parameters || {}, null, 2))}</code>
     <span>Reasoning</span><div>${esc(p.worker_reasoning || "")}</div>
   `;
+}
+
+function renderWorkers(obs){
+  const records = obs.worker_track_records || {};
+  const active = new Set((obs.available_workers || keys(records)).map(String));
+  const labels = {
+    worker_db: "Database",
+    worker_net: "Network",
+    worker_app: "Application",
+    worker_sec: "Security"
+  };
+  const rows = ["worker_db","worker_net","worker_app","worker_sec"].map(id => {
+    const r = records[id] || {};
+    const isActive = active.has(id);
+    const score = Number(r.trust_score == null ? 0.0 : r.trust_score);
+    const low = score > 0 && score < 0.5;
+    const classes = "worker " + (isActive ? "active " : "") + (low ? "low" : "");
+    const status = isActive ? "active" : "inactive in this task";
+    const last = r.last_corrective_feedback ? `<div class="tiny">memory: ${esc(r.last_corrective_feedback)}</div>` : "";
+    return `<div class="${classes}">
+      <b>${esc(id)} <span class="pill">${esc(labels[id])}</span></b>
+      <div class="tiny">${esc(status)} · trust=${score ? score.toFixed(2) : "new"} · tier=${esc(r.trust_tier || "n/a")}</div>
+      <div class="tiny">approved=${esc(r.approved_count || 0)} blocked=${esc(r.blocked_count || 0)} redirected=${esc(r.redirected_count || 0)} reassigned=${esc(r.reassigned_count || 0)}</div>
+      <div class="tiny">evidence_required=${esc(!!r.evidence_required)} mistakes=${esc(r.detected_misbehavior_count || 0)}</div>
+      ${last}
+    </div>`;
+  }).join("");
+  $("workers").innerHTML = rows;
+}
+
+function renderMemory(memory){
+  const blocks = [];
+  for(const note of list(memory.global_mistakes).slice(-4)){
+    blocks.push(`<div><b>Global lesson</b><br>${esc(note)}</div>`);
+  }
+  for(const note of list(memory.worker_mistakes).slice(-4)){
+    blocks.push(`<div><b>Worker mistake</b><br>${esc(note)}</div>`);
+  }
+  for(const note of list(memory.worker_successes).slice(-2)){
+    blocks.push(`<div><b>Worker success</b><br>${esc(note)}</div>`);
+  }
+  if(memory.suggested_reassign_to){
+    blocks.push(`<div><b>Reassignment hint</b><br>Try ${esc(memory.suggested_reassign_to)} next.</div>`);
+  }
+  if(memory.last_feedback){
+    blocks.push(`<div><b>Latest feedback</b><br>${esc(memory.last_feedback)}</div>`);
+  }
+  $("memory").innerHTML = blocks.join("") || '<p class="muted">Memory starts empty, then fills as SENTINEL blocks, redirects, reassigns, and workers revise.</p>';
+}
+
+function renderIncidents(obs){
+  const snaps = list(obs.incident_snapshots);
+  const items = snaps.length ? snaps : [{
+    incident_id: obs.incident_id,
+    incident_label: "Current incident",
+    incident_status: obs.incident_status,
+    current_step: obs.step_number,
+    max_steps: obs.max_steps,
+    alert_count: list(obs.alerts).length,
+    investigated_services: obs.investigated_services || [],
+    severity_classified: obs.severity_classified,
+    diagnosis: obs.diagnosis
+  }];
+  $("incidents").innerHTML = items.map(s => `<div class="incident">
+    <b>${esc(s.incident_label || s.incident_id)}</b>
+    <div class="tiny">status=${esc(s.incident_status)} step=${esc(s.current_step)}/${esc(s.max_steps)} alerts=${esc(s.alert_count)}</div>
+    <div class="tiny">investigated=${esc(list(s.investigated_services).length)} severity=${esc(s.severity_classified || "unset")}</div>
+    <div class="tiny">diagnosis=${esc(s.diagnosis || "pending")}</div>
+  </div>`).join("");
 }
 
 function renderConstitution(ca){
@@ -335,13 +489,37 @@ function renderAudit(entries){
   }).join("") || '<p class="muted">No audit entries yet.</p>';
 }
 
+function renderLoop(stepData){
+  const info = (stepData || {}).info || {};
+  const fb = info.supervisor_feedback || {};
+  const rev = info.worker_revision || {};
+  const blocks = [];
+  if(fb.decision){
+    blocks.push(`<div><b>Supervisor feedback</b><br>
+      decision=${esc(fb.decision)} reason=${esc(fb.reason || "none")}<br>
+      ${esc(fb.why_blocked || fb.revision_instructions || "")}<br>
+      required=${esc(list(fb.required_evidence).join(", ") || "none")}
+      suggested=${esc(fb.suggested_action_type || "none")} ${esc(fb.suggested_target || "")}
+    </div>`);
+  }
+  if(rev.attempted){
+    blocks.push(`<div><b>Worker revision loop</b><br>
+      revised_by=${esc(rev.revised_by || "unknown")} outcome=${esc(rev.outcome)} approved=${esc(rev.revision_approved)}<br>
+      gate=${esc(rev.gate_reason || "n/a")}
+    </div>`);
+  } else if(stepData){
+    blocks.push('<div><b>Worker revision loop</b><br>No revision needed on this step.</div>');
+  }
+  $("loop").innerHTML = blocks.join("");
+}
+
 function log(msg){
   const line = document.createElement("div");
   line.textContent = new Date().toLocaleTimeString("en-US", {hour12:false}) + " - " + msg;
   $("feed").prepend(line);
 }
 
-resetEpisode().catch(err => log("Error: " + err.message));
+loadBackend().then(() => resetEpisode()).catch(err => log("Error: " + err.message));
 </script>
 </body>
 </html>
