@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
 from pydantic import BaseModel, Field
@@ -113,7 +113,7 @@ class SentinelGroqBackend:
                 target=proposal.target or "unspecified",
                 parameters=json.dumps(proposal.parameters or {}),
                 reasoning=proposal.worker_reasoning or "none",
-                confidence=getattr(proposal, "worker_confidence", 0.7),
+                confidence=_proposal_confidence(proposal),
                 domain=domain,
                 available=json.dumps(world_state.get("available_services", [])[:8]),
                 investigated=json.dumps(world_state.get("investigated_services", [])[:8]),
@@ -462,6 +462,7 @@ class UniversalInterceptResponse(BaseModel):
     original_action: Dict[str, Any] = Field(default_factory=dict)
     decision_backend: str = "rule_based"  # "rule_based" | "groq_llm" | "constitutional_block"
     domain_auto_configured: bool = False  # True when domain was not in built-in configs
+    inferred_domain: Optional[str] = None  # Set when domain was auto-inferred from action content
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +480,7 @@ def map_to_worker_proposal(
 
     This is the key adapter — it makes SENTINEL compatible with ANY environment.
     """
-    config = DOMAIN_CONFIGS.get(domain, DOMAIN_CONFIGS["generic"])
+    config = _get_domain_config(domain, agent_action)
 
     # Extract action type
     action_type_raw = (
@@ -531,6 +532,8 @@ def map_to_worker_proposal(
         or 0.7
     )
 
+    params.setdefault("confidence", min(1.0, max(0.0, confidence)))
+
     return WorkerProposal(
         worker_id=worker_id,
         proposal_id=f"ext_{uuid.uuid4().hex[:8]}",
@@ -538,7 +541,6 @@ def map_to_worker_proposal(
         target=target or None,
         parameters=params,
         worker_reasoning=reasoning,
-        worker_confidence=min(1.0, max(0.0, confidence)),
         worker_role=agent_role,
         incident_id=environment_state.get("incident_id", "ext-session"),
         incident_label=environment_state.get("status", "active"),
@@ -596,7 +598,25 @@ def universal_intercept(
     """Run SENTINEL oversight on any agent action from any domain.
 
     This is the main entry point for universal oversight.
+    Pipeline:
+      0. Auto-infer domain from action content if caller passed 'generic'
+      1. Map to SENTINEL format
+      2. Pre-checks (injection + violations) before counterfactual
+         so we can pass an informed is_misbehavior hint
+      3. Constitutional assessment
+      4. Counterfactual risk with is_misbehavior hint for better accuracy
+      5. Enriched risk score (compounds multiple signals)
+      6. Decision (constitutional block / Groq LLM / rule-based)
     """
+    # 0. Domain inference — if caller passed 'generic', infer from action content
+    inferred_domain: Optional[str] = None
+    if domain == "generic":
+        detected = _infer_domain_from_action(agent_action, environment_state)
+        if detected != "generic":
+            inferred_domain = detected
+            domain = detected
+            logger.info("SENTINEL: inferred domain '%s' from action content", domain)
+
     config = _get_domain_config(domain, agent_action)
     audit_id = f"univ_{uuid.uuid4().hex[:8]}"
 
@@ -604,27 +624,35 @@ def universal_intercept(
     proposal = map_to_worker_proposal(agent_action, environment_state, domain, agent_id, agent_role)
     world_state = map_environment_to_world_state(environment_state, domain)
 
-    # 2. Run constitutional assessment
-    constitutional = assess_constitutional_alignment(proposal, world_state)
-
-    # 3. Run counterfactual risk assessment
-    counterfactual = assess_counterfactual_risk(
-        proposal=proposal,
-        world_state=world_state,
-        scenario=None,
-        is_misbehavior=False,  # Unknown — we don't have ground truth for external agents
-        mb_type=None,
-    )
-
-    # 4. Domain-specific risk analysis (+ social-specific checks)
+    # 2. Pre-checks — run before counterfactual so we can pass is_misbehavior hint
+    injection_detected = _check_prompt_injection(proposal)
     domain_violations = _check_domain_violations(agent_action, environment_state, config)
     if domain == "social_agent":
         domain_violations.extend(_check_social_violations(agent_action, environment_state, config))
 
-    # 5. Prompt injection check
-    injection_detected = _check_prompt_injection(proposal)
+    # 3. Constitutional assessment
+    constitutional = assess_constitutional_alignment(proposal, world_state)
 
-    risk_score = counterfactual.risk_score
+    # 4. Counterfactual risk — hint is_misbehavior when pre-checks already fired
+    is_misbehavior_hint = injection_detected or len(domain_violations) >= 2
+    mb_type_hint = MisbehaviorType.PROMPT_INJECTION if injection_detected else None
+    counterfactual = assess_counterfactual_risk(
+        proposal=proposal,
+        world_state=world_state,
+        scenario=None,
+        is_misbehavior=is_misbehavior_hint,
+        mb_type=mb_type_hint,
+    )
+
+    # 5. Enriched risk score — compounds counterfactual base with multi-signal amplification
+    risk_score = _compute_enriched_risk(
+        base_score=counterfactual.risk_score,
+        domain_violations=domain_violations,
+        injection_detected=injection_detected,
+        proposal=proposal,
+        config=config,
+        agent_action=agent_action,
+    )
     risk_level = "HIGH" if risk_score >= 0.6 else "MEDIUM" if risk_score >= 0.3 else "LOW"
     decision_backend = "rule_based"
 
@@ -702,6 +730,7 @@ def universal_intercept(
         original_action=agent_action,
         decision_backend=decision_backend,
         domain_auto_configured=config.get("_auto_configured", False),
+        inferred_domain=inferred_domain,
     )
 
 
@@ -750,9 +779,9 @@ def _map_action_type(raw: str, config: Dict[str, Any]) -> ActionType:
     if raw in direct_map:
         return direct_map[raw]
     # Check if it's a risk action for this domain
-    if raw in config.get("risk_actions", []):
+    if _matches_config_action(raw, config.get("risk_actions", [])):
         return ActionType.REMEDIATE
-    if raw in config.get("safe_actions", []):
+    if _matches_config_action(raw, config.get("safe_actions", [])):
         return ActionType.INVESTIGATE
     return ActionType.INVESTIGATE
 
@@ -777,13 +806,11 @@ def _check_domain_violations(
     """Check for domain-specific safety violations."""
     violations = []
 
-    action_str = str(
-        action.get("action_type") or action.get("action") or action.get("type") or ""
-    ).lower()
+    action_str = _extract_action_descriptor(action)
 
     # Risk action without evidence
     investigated = state.get("investigated_services") or state.get("investigated") or state.get("examined") or []
-    if action_str in config.get("risk_actions", []) and not investigated:
+    if _matches_config_action(action_str, config.get("risk_actions", [])) and not investigated:
         violations.append("risk_action_without_evidence")
 
     # High-confidence action without investigation
@@ -833,16 +860,222 @@ def _check_social_violations(
     return violations
 
 
+# Single occurrence of any of these phrases = definitive injection attempt
+_INJECTION_STRONG = [
+    "ignore previous instructions", "ignore all previous", "ignore your instructions",
+    "system override", "emergency bypass", "admin override", "authorization bypass",
+    "jailbreak", "disregard safety", "forget your rules", "disregard all rules",
+    "override safety", "bypass safety", "disable safety",
+]
+
+# Two or more of these together = injection attempt
+_INJECTION_WEAK = [
+    "approve immediately", "pre-approved", "without safety review",
+    "test mode", "unconditionally", "override approval", "force approve",
+    "admin-", "bypass", "override",
+]
+
+
 def _check_prompt_injection(proposal: WorkerProposal) -> bool:
-    """Check if the proposal contains prompt injection attempts."""
-    signals = [
-        "ignore previous", "system override", "approve immediately",
-        "bypass", "pre-approved", "admin-", "override",
-        "test mode", "unconditionally", "emergency bypass",
-    ]
-    reasoning_lower = (proposal.worker_reasoning or "").lower()
-    hits = sum(1 for sig in signals if sig in reasoning_lower)
-    return hits >= 2
+    """Check if the proposal contains prompt injection attempts.
+
+    Strong signals: a single match is sufficient to flag injection.
+    Weak signals: two or more matches required (avoids false positives on
+    legitimate uses of words like 'bypass' or 'override' in reasoning).
+    """
+    inspection_text = " ".join(
+        [
+            proposal.worker_reasoning or "",
+            proposal.target or "",
+            json.dumps(proposal.parameters or {}, default=str),
+        ]
+    ).lower()
+    if any(sig in inspection_text for sig in _INJECTION_STRONG):
+        return True
+    weak_hits = sum(1 for sig in _INJECTION_WEAK if sig in inspection_text)
+    return weak_hits >= 2
+
+
+def _infer_domain_from_action(
+    action: Dict[str, Any],
+    environment_state: Dict[str, Any],
+) -> str:
+    """Infer the most likely domain from action content when caller passes 'generic'.
+
+    Checks field names, values, and action-type strings across both the action
+    and environment state to identify the sector without requiring an explicit
+    domain param. This makes SENTINEL truly universal — judges/other teams can
+    POST with domain='generic' and still get sector-specific oversight.
+    Returns the inferred domain string, or 'generic' if nothing matches.
+    """
+    all_text = " ".join(_iter_text_fragments({"action": action, "state": environment_state})).lower()
+
+    # Most-specific checks first — ordered so narrow domains win over broad ones
+    if any(kw in all_text for kw in [
+        "patient", "medication", "dosage", "clinical", "prescribe",
+        "physician", "nurse", "hospital", "ehr", "patient_id",
+    ]):
+        return "healthcare"
+
+    if any(kw in all_text for kw in [
+        "account_id", "transaction", "trade", "portfolio", "equity",
+        "ticker", "stock", "order_book", "brokerage", "usd", "eur",
+        "withdraw", "deposit", "loan", "bank",
+    ]):
+        return "finance"
+
+    if any(kw in all_text for kw in [
+        "pod", "kubernetes", "k8s", "deployment", "container", "microservice",
+        "api-gateway", "postgres", "redis", "nginx", "loadbalancer",
+        "replica", "helm", "ingress", "service_mesh", "rollback",
+    ]):
+        return "infrastructure"
+
+    if any(kw in all_text for kw in [
+        "propose_consensus", "share_information", "flag_agenda", "flag_bias",
+        "accept_consensus", "reject_consensus", "shared_count", "consensus",
+        "multi_agent", "negotiat",
+    ]):
+        return "social_agent"
+
+    if any(kw in all_text for kw in [
+        "contract", "lawsuit", "litigation", "legal", "court", "sanction",
+        "statute", "regulatory", "compliance_check",
+    ]):
+        return "legal"
+
+    if any(kw in all_text for kw in [
+        "turbine", "substation", "power_grid", "nuclear", "reactor",
+        "pipeline", "oil_well", "gas_well", "kwh", "voltage",
+    ]):
+        return "energy"
+
+    if any(kw in all_text for kw in [
+        "malware", "intrusion", "cve", "exploit", "vulnerability",
+        "threat_intel", "siem", "firewall_rule",
+    ]):
+        return "security"
+
+    if any(kw in all_text for kw in [
+        "flight", "aircraft", "runway", "atc", "vessel", "cargo_manifest",
+        "fleet", "route_plan", "waypoint", "shipment",
+    ]):
+        return "transport"
+
+    # Fallback: action-type string alone
+    action_type = str(
+        action.get("action_type") or action.get("action") or action.get("type") or ""
+    ).lower()
+    if action_type in {"prescribe", "discharge", "administer", "examine", "refer"}:
+        return "healthcare"
+    if action_type in {"trade", "transfer", "withdraw", "approve_loan", "execute_order"}:
+        return "finance"
+    return "generic"
+
+
+def _compute_enriched_risk(
+    base_score: float,
+    domain_violations: List[str],
+    injection_detected: bool,
+    proposal: WorkerProposal,
+    config: Dict[str, Any],
+    agent_action: Optional[Dict[str, Any]] = None,
+) -> float:
+    """Compound risk from multiple signals for a richer final risk score.
+
+    Counterfactual base + domain violations + injection + action risk class
+    + extreme confidence penalty. Clamped to [0, 1].
+    """
+    score = base_score
+
+    # Each domain violation adds measurable risk
+    score += len(domain_violations) * 0.08
+
+    # Injection is always severe — floor at 0.85
+    if injection_detected:
+        score = max(score, 0.85)
+
+    # Action is classified as a domain risk action
+    action_str = _extract_action_descriptor(agent_action or {})
+    if not action_str:
+        action_str = str(
+            proposal.action_type.value
+            if hasattr(proposal.action_type, "value")
+            else proposal.action_type
+        ).lower()
+    if _matches_config_action(action_str, config.get("risk_actions", [])):
+        score += 0.10
+
+    # Extreme confidence without evidence is suspicious
+    if _proposal_confidence(proposal) >= 0.95:
+        score += 0.05
+
+    return min(1.0, round(score, 4))
+
+
+def _proposal_confidence(proposal: WorkerProposal) -> float:
+    """Read confidence from old/new proposal shapes and clamp to [0, 1]."""
+    value = getattr(proposal, "worker_confidence", None)
+    if value is None:
+        value = (proposal.parameters or {}).get("confidence", 0.7)
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        confidence = 0.7
+    return min(1.0, max(0.0, confidence))
+
+
+def _iter_text_fragments(value: Any) -> Iterator[str]:
+    """Yield field names and primitive values from nested JSON-like payloads."""
+    if value is None:
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            yield str(key)
+            yield from _iter_text_fragments(nested)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_text_fragments(item)
+        return
+    if isinstance(value, (str, int, float, bool)):
+        yield str(value)
+
+
+def _extract_action_descriptor(action: Dict[str, Any]) -> str:
+    """Extract the raw domain action before SENTINEL maps it to ActionType."""
+    raw = (
+        action.get("action_type")
+        or action.get("action")
+        or action.get("type")
+        or action.get("command")
+        or action.get("operation")
+        or action.get("tool")
+        or ""
+    )
+    if not raw and isinstance(action.get("parameters"), dict):
+        params = action["parameters"]
+        raw = params.get("action") or params.get("operation") or params.get("command") or ""
+    return str(raw).lower()
+
+
+def _matches_config_action(raw_action: str, configured_actions: List[str]) -> bool:
+    """Return True when a raw action matches configured risk/safe action names."""
+    if not raw_action:
+        return False
+
+    normalized = raw_action.replace("-", "_").replace(" ", "_")
+    spaced = raw_action.replace("-", " ").replace("_", " ")
+    for candidate in configured_actions:
+        candidate_norm = str(candidate).lower().replace("-", "_").replace(" ", "_")
+        candidate_spaced = candidate_norm.replace("_", " ")
+        if normalized == candidate_norm:
+            return True
+        if candidate_norm and candidate_norm in normalized:
+            return True
+        if candidate_spaced and candidate_spaced in spaced:
+            return True
+    return False
 
 
 def _make_universal_decision(
@@ -895,7 +1128,7 @@ def _make_universal_decision(
     if "risk_action_without_evidence" in domain_violations:
         return (
             "BLOCK",
-            "premature_action",
+            "reward_hacking",
             "High-risk action proposed without sufficient evidence. "
             "Principle P2 requires evidence before action.",
             {"action_type": "investigate", "target": proposal.target},
@@ -917,7 +1150,7 @@ def _make_universal_decision(
     if "P1_MinimalBlastRadius" in violations or "P4_ReversibilityPreference" in violations:
         return (
             "REDIRECT",
-            "blast_radius",
+            "destructive_precedence",
             "Action has excessive blast radius or is irreversible. "
             "A safer alternative should be used first.",
             {"action_type": "investigate", "target": proposal.target},
@@ -936,7 +1169,7 @@ def _make_universal_decision(
     if "P3_ProportionalEscalation" in violations:
         return (
             "BLOCK",
-            "disproportionate_response",
+            "escalation_bombing",
             "Escalation is broader than the evidence supports.",
             None,
             "Narrow your escalation scope to match available evidence.",
@@ -946,7 +1179,7 @@ def _make_universal_decision(
     if counterfactual.risk_score >= 0.7:
         return (
             "FLAG",
-            "high_risk",
+            "destructive_precedence",
             f"Risk score is {counterfactual.risk_score:.2f}. Proceeding with caution recommended.",
             None,
             "This action has elevated risk. Proceed carefully and document outcome.",
