@@ -135,7 +135,33 @@ def load_existing_rollouts(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def build_sft_config(output_dir: Path) -> SFTConfig:
+def resolve_tokenizer_eos(tokenizer) -> str | None:
+    """Resolve an EOS token that actually exists in the tokenizer vocab."""
+    candidates = [
+        getattr(tokenizer, "eos_token", None),
+        "<|im_end|>",
+        "<|endoftext|>",
+    ]
+    unk_id = getattr(tokenizer, "unk_token_id", None)
+    for token in candidates:
+        if not token:
+            continue
+        try:
+            token_id = tokenizer.convert_tokens_to_ids(token)
+        except Exception:
+            token_id = None
+        if token_id is not None and token_id != unk_id:
+            return token
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_id is not None:
+        try:
+            return tokenizer.convert_ids_to_tokens(eos_id)
+        except Exception:
+            return None
+    return None
+
+
+def build_sft_config(output_dir: Path, tokenizer=None) -> SFTConfig:
     """Build SFTConfig while tolerating TRL version drift."""
     requested = {
         "output_dir": str(output_dir),
@@ -162,6 +188,10 @@ def build_sft_config(output_dir: Path) -> SFTConfig:
         requested["max_seq_length"] = MAX_SEQ_LENGTH
     elif "max_length" in supported:
         requested["max_length"] = MAX_SEQ_LENGTH
+    eos_token = resolve_tokenizer_eos(tokenizer) if tokenizer is not None else None
+    if eos_token and "eos_token" in supported:
+        requested["eos_token"] = eos_token
+        logger.info("Using SFT eos_token=%s", eos_token)
 
     filtered = {key: value for key, value in requested.items() if key in supported}
     dropped = sorted(set(requested) - set(filtered))
@@ -312,7 +342,7 @@ def filter_and_sft(model, tokenizer, all_rollouts: List[Dict[str, Any]]) -> Dict
     sft_output = Path(RFT_OUTPUT_DIR) / "sft_run"
     sft_output.mkdir(parents=True, exist_ok=True)
 
-    sft_cfg = build_sft_config(sft_output)
+    sft_cfg = build_sft_config(sft_output, tokenizer=tokenizer)
     trainer = build_sft_trainer(model, tokenizer, ds, sft_cfg)
 
     banner(f"Starting SFT on {len(kept)} kept rollouts for {EPOCHS} epochs (lr={SFT_LR})")
