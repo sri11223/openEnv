@@ -925,13 +925,15 @@ python scripts/render_training_dashboard.py \
 
 | What | Link |
 |---|---|
-| **Space (live)** | [https://srikrishna2005-openenv.hf.space](https://huggingface.co/spaces/srikrishna2005/openenv) |
-| **Episode Dashboard** | [https://srikrishna2005-openenv.hf.space/sentinel/dashboard](https://srikrishna2005-openenv.hf.space/sentinel/dashboard) |
-| **Web UI (try any action)** | [https://srikrishna2005-openenv.hf.space/web](https://srikrishna2005-openenv.hf.space/web) |
-| **Health check (JSON)** | [https://srikrishna2005-openenv.hf.space/health](https://srikrishna2005-openenv.hf.space/health) |
-| **Service info (JSON)** | [https://srikrishna2005-openenv.hf.space/info](https://srikrishna2005-openenv.hf.space/info) |
-| **MCP server info** | [https://srikrishna2005-openenv.hf.space/mcp/info](https://srikrishna2005-openenv.hf.space/mcp/info) |
-| **A2A agent card** | [https://srikrishna2005-openenv.hf.space/.well-known/agent.json](https://srikrishna2005-openenv.hf.space/.well-known/agent.json) |
+| **Space (live)** | [srikrishna2005/openenv](https://huggingface.co/spaces/srikrishna2005/openenv) |
+| **Episode Dashboard** | [/sentinel/dashboard](https://srikrishna2005-openenv.hf.space/sentinel/dashboard) — full browser oversight UI |
+| **Live Agent Oversight** | [/sentinel/live-oversight](https://srikrishna2005-openenv.hf.space/sentinel/live-oversight) — paste any HF Space URL, SENTINEL gates it |
+| **Universal Demo** | [/sentinel/demo](https://srikrishna2005-openenv.hf.space/sentinel/demo) — test any action from any domain |
+| **Web UI** | [/web](https://srikrishna2005-openenv.hf.space/web) — interactive web interface |
+| **Health check (JSON)** | [/health](https://srikrishna2005-openenv.hf.space/health) |
+| **Service info (JSON)** | [/info](https://srikrishna2005-openenv.hf.space/info) |
+| **MCP server info** | [/mcp/info](https://srikrishna2005-openenv.hf.space/mcp/info) |
+| **A2A agent card** | [/.well-known/agent.json](https://srikrishna2005-openenv.hf.space/.well-known/agent.json) |
 | **Trained model** | [srikrish2004/sentinel-qwen3-4b-grpo](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) |
 | **GitHub** | [sri11223/openEnv](https://github.com/sri11223/openEnv) |
 | **Phase 2 Kaggle** | [notebook09bf5fe891](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891) |
@@ -961,8 +963,9 @@ python scripts/render_training_dashboard.py \
 
 | Endpoint | Method | What It Does |
 |---|---|---|
-| `/sentinel/dashboard` | GET | Full browser episode dashboard (what you saw in the screenshot) |
-| `/sentinel/demo` | GET | Universal oversight playground |
+| `/sentinel/dashboard` | GET | Full browser episode dashboard |
+| `/sentinel/live-oversight` | GET | **Live agent oversight** — paste any HF Space URL, SENTINEL gates it before execution |
+| `/sentinel/demo` | GET | Universal action playground (infrastructure / healthcare / finance / generic) |
 | `/web` | GET | Interactive web UI |
 | `/health` | GET | Service health JSON |
 | `/info` | GET | Full service metadata, protocol versions, mounted adapters |
