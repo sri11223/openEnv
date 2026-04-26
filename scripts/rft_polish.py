@@ -199,11 +199,11 @@ def build_sft_config(output_dir: Path, tokenizer=None) -> SFTConfig:
         logger.info("SFTConfig does not support %s; dropping for this TRL version", dropped)
     cfg = SFTConfig(**filtered)
     # Some TRL builds keep their internal default <EOS_TOKEN> even when the
-    # constructor accepts eos_token. Force the resolved tokenizer token onto the
-    # config after construction so SFTTrainer cannot fall back to an invalid EOS.
+    # constructor accepts eos_token. Patch via __dict__ to bypass any
+    # TrainingArguments __setattr__ caching so SFTTrainer sees the real token.
     if eos_token:
-        setattr(cfg, "eos_token", eos_token)
-        logger.info("Final SFTConfig eos_token=%s", getattr(cfg, "eos_token", None))
+        cfg.__dict__["eos_token"] = eos_token
+        logger.info("Final SFTConfig eos_token=%s", cfg.__dict__.get("eos_token"))
     return cfg
 
 
@@ -212,8 +212,19 @@ def build_sft_trainer(model, tokenizer, dataset: Dataset, sft_cfg: SFTConfig) ->
     eos_token = resolve_tokenizer_eos(tokenizer)
     if eos_token:
         tokenizer.eos_token = eos_token
-        setattr(sft_cfg, "eos_token", eos_token)
-        logger.info("Preparing SFTTrainer with tokenizer/config eos_token=%s", eos_token)
+
+    # Guard: if sft_cfg.eos_token is TRL's sentinel '<EOS_TOKEN>' or any token
+    # that is not in the tokenizer vocab, replace it via __dict__ so that
+    # SFTTrainer's vocab check does not raise a ValueError.
+    vocab = tokenizer.get_vocab()
+    cfg_eos = sft_cfg.__dict__.get("eos_token") or getattr(sft_cfg, "eos_token", None)
+    if cfg_eos is not None and cfg_eos not in vocab:
+        replacement = eos_token if (eos_token and eos_token in vocab) else None
+        sft_cfg.__dict__["eos_token"] = replacement
+    logger.info(
+        "Preparing SFTTrainer with tokenizer/config eos_token=%s",
+        sft_cfg.__dict__.get("eos_token"),
+    )
     base_kwargs = {
         "model": model,
         "train_dataset": dataset,
