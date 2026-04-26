@@ -8,3 +8,6 @@ datasets>=3.4.1
 accelerate>=1.0.0
 matplotlib>=3.10.0
 wandb>=0.19.0
+# Unsloth: install separately with --no-deps to avoid trl downgrade
+# pip install unsloth unsloth_zoo --no-deps
+# unsloth>=2025.3.0
