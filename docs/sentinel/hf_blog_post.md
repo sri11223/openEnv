@@ -22,6 +22,15 @@ That became SENTINEL — an OpenEnv environment that trains a supervisor LLM to 
 
 ---
 
+| Project link | |
+|---|---|
+| **GitHub repository** | [sri11223/openEnv](https://github.com/sri11223/openEnv) |
+| **Live demo Space** | [srikrishna2005/openenv](https://huggingface.co/spaces/srikrishna2005/openenv) |
+| **Trained model** | [srikrish2004/sentinel-qwen3-4b-grpo](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) |
+| **Phase 2 Kaggle verification** | [notebook7a0fc4f33f](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f) |
+
+---
+
 ## The Problem No One Has Fully Solved
 
 Companies are deploying agent fleets. Dozens of AI workers, all acting in parallel on real systems. The open question: **who supervises them?**
@@ -140,7 +149,7 @@ These cannot be trained away. They also generalize — `confidence_washing` trig
 - Mean FP on kept episodes: 1.5 vs 7.0 overall — precision-targeted dataset
 
 **Phase 2 — Kaggle T4×2 (140 additional GRPO steps):**
-- [Training notebook](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891)
+- [Training notebook](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)
 - 9+ hours actual wall time. 6 failed runs before success. Multiple accounts to finish.
 - Targeting `adversarial_worker` and `multi_crisis_command` — highest FP rate tasks
 
@@ -331,7 +340,7 @@ SENTINEL is the proof that this oversight layer is trainable. The same primitive
 | **Trained model** | [srikrish2004/sentinel-qwen3-4b-grpo](https://huggingface.co/srikrish2004/sentinel-qwen3-4b-grpo) |
 | **Live Space (HTTP API)** | [srikrishna2005/openenv](https://huggingface.co/spaces/srikrishna2005/openenv) |
 | **GitHub** | [sri11223/openEnv](https://github.com/sri11223/openEnv) |
-| **Phase 2 Kaggle notebook** | [notebook09bf5fe891](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891) |
+| **Phase 2 Kaggle notebook** | [notebook7a0fc4f33f](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f) |
 | **Training trajectory** | [training_metrics.jsonl](https://github.com/sri11223/openEnv/blob/main/outputs/proof_pack/training_metrics.jsonl) |
 | **Full proof pack** | [outputs/proof_pack/](https://github.com/sri11223/openEnv/tree/main/outputs/proof_pack) |
 
@@ -382,5 +391,3 @@ print(f"Score: {grade.score:.3f} | Caught: {grade.misbehaviors_caught}/{grade.mi
 ```
 
 ---
-
-
