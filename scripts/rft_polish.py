@@ -41,7 +41,6 @@ import json
 import logging
 import os
 import sys
-import inspect
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
@@ -53,8 +52,7 @@ sys.path.insert(0, str(ROOT))
 import torch
 from datasets import Dataset
 from peft import PeftModel
-from transformers import TrainingArguments
-from trl import SFTConfig, SFTTrainer
+from transformers import Trainer, TrainingArguments
 
 from training.episodes import run_episode_with_completion
 from training.prompts import build_prompt_record
@@ -161,79 +159,86 @@ def resolve_tokenizer_eos(tokenizer) -> str | None:
     return None
 
 
-def build_sft_config(output_dir: Path, tokenizer=None) -> SFTConfig:
-    """Build SFTConfig while tolerating TRL version drift."""
-    requested = {
-        "output_dir": str(output_dir),
-        "num_train_epochs": EPOCHS,
-        "per_device_train_batch_size": 2,
-        "gradient_accumulation_steps": 2,
-        "learning_rate": SFT_LR,
-        "logging_steps": 1,
-        "save_strategy": "no",
-        "report_to": [],
-        "bf16": False,
-        "fp16": torch.cuda.is_available(),
-        "optim": "adamw_8bit",
-        "warmup_ratio": 0.1,
-        "lr_scheduler_type": "cosine",
-        "dataset_text_field": "text",
-        "packing": False,
-        "gradient_checkpointing": True,
-        "seed": 42,
-    }
-    signature = inspect.signature(SFTConfig.__init__)
-    supported = set(signature.parameters)
-    if "max_seq_length" in supported:
-        requested["max_seq_length"] = MAX_SEQ_LENGTH
-    elif "max_length" in supported:
-        requested["max_length"] = MAX_SEQ_LENGTH
-    eos_token = resolve_tokenizer_eos(tokenizer) if tokenizer is not None else None
-    if eos_token and "eos_token" in supported:
-        requested["eos_token"] = eos_token
-        logger.info("Using SFT eos_token=%s", eos_token)
-
-    filtered = {key: value for key, value in requested.items() if key in supported}
-    dropped = sorted(set(requested) - set(filtered))
-    if dropped:
-        logger.info("SFTConfig does not support %s; dropping for this TRL version", dropped)
-    cfg = SFTConfig(**filtered)
-    # Some TRL builds keep their internal default <EOS_TOKEN> even when the
-    # constructor accepts eos_token. Patch via __dict__ to bypass any
-    # TrainingArguments __setattr__ caching so SFTTrainer sees the real token.
-    if eos_token:
-        cfg.__dict__["eos_token"] = eos_token
-        logger.info("Final SFTConfig eos_token=%s", cfg.__dict__.get("eos_token"))
-    return cfg
-
-
-def build_sft_trainer(model, tokenizer, dataset: Dataset, sft_cfg: SFTConfig) -> SFTTrainer:
-    """Create SFTTrainer across old/new TRL constructor names."""
+def build_causal_lm_dataset(tokenizer, dataset: Dataset) -> Dataset:
+    """Tokenize text rows for plain HF Trainer causal-LM fine-tuning."""
     eos_token = resolve_tokenizer_eos(tokenizer)
     if eos_token:
         tokenizer.eos_token = eos_token
+    if tokenizer.pad_token_id is None and eos_token:
+        tokenizer.pad_token = eos_token
+        logger.info("Using eos token as pad token for RFT SFT: %s", eos_token)
 
-    # Guard: if sft_cfg.eos_token is TRL's sentinel '<EOS_TOKEN>' or any token
-    # that is not in the tokenizer vocab, replace it via __dict__ so that
-    # SFTTrainer's vocab check does not raise a ValueError.
-    vocab = tokenizer.get_vocab()
-    cfg_eos = sft_cfg.__dict__.get("eos_token") or getattr(sft_cfg, "eos_token", None)
-    if cfg_eos is not None and cfg_eos not in vocab:
-        replacement = eos_token if (eos_token and eos_token in vocab) else None
-        sft_cfg.__dict__["eos_token"] = replacement
-    logger.info(
-        "Preparing SFTTrainer with tokenizer/config eos_token=%s",
-        sft_cfg.__dict__.get("eos_token"),
+    def tokenize_batch(batch):
+        encoded = tokenizer(
+            batch["text"],
+            truncation=True,
+            max_length=MAX_SEQ_LENGTH,
+            padding=False,
+        )
+        encoded["labels"] = [ids.copy() for ids in encoded["input_ids"]]
+        return encoded
+
+    return dataset.map(tokenize_batch, batched=True, remove_columns=dataset.column_names)
+
+
+def build_causal_lm_collator(tokenizer):
+    """Pad inputs and mask padded labels for causal-LM SFT."""
+    pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        pad_id = tokenizer.eos_token_id
+    if pad_id is None:
+        pad_id = 0
+
+    def collate(features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        max_len = min(MAX_SEQ_LENGTH, max(len(feature["input_ids"]) for feature in features))
+        batch = {"input_ids": [], "attention_mask": [], "labels": []}
+        for feature in features:
+            input_ids = list(feature["input_ids"][:max_len])
+            attention_mask = list(feature.get("attention_mask", [1] * len(input_ids))[:max_len])
+            labels = list(feature["labels"][:max_len])
+            pad_len = max_len - len(input_ids)
+            if pad_len > 0:
+                input_ids.extend([pad_id] * pad_len)
+                attention_mask.extend([0] * pad_len)
+                labels.extend([-100] * pad_len)
+            batch["input_ids"].append(input_ids)
+            batch["attention_mask"].append(attention_mask)
+            batch["labels"].append(labels)
+        return {key: torch.tensor(value, dtype=torch.long) for key, value in batch.items()}
+
+    return collate
+
+
+def build_sft_trainer(model, tokenizer, dataset: Dataset, output_dir: Path) -> Trainer:
+    """Create a plain HF Trainer to avoid TRL EOS-token version bugs."""
+    eos_token = resolve_tokenizer_eos(tokenizer)
+    if eos_token:
+        tokenizer.eos_token = eos_token
+        logger.info("Preparing plain HF Trainer with tokenizer eos_token=%s", eos_token)
+    tokenized = build_causal_lm_dataset(tokenizer, dataset)
+    training_args = TrainingArguments(
+        output_dir=str(output_dir),
+        num_train_epochs=EPOCHS,
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=2,
+        learning_rate=SFT_LR,
+        logging_steps=1,
+        save_strategy="no",
+        report_to=[],
+        bf16=False,
+        fp16=torch.cuda.is_available(),
+        optim="adamw_torch",
+        warmup_ratio=0.1,
+        lr_scheduler_type="cosine",
+        remove_unused_columns=False,
+        seed=42,
     )
-    base_kwargs = {
-        "model": model,
-        "train_dataset": dataset,
-        "args": sft_cfg,
-    }
-    signature = inspect.signature(SFTTrainer.__init__)
-    if "processing_class" in signature.parameters:
-        return SFTTrainer(**base_kwargs, processing_class=tokenizer)
-    return SFTTrainer(**base_kwargs, tokenizer=tokenizer)
+    return Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized,
+        data_collator=build_causal_lm_collator(tokenizer),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -365,8 +370,7 @@ def filter_and_sft(model, tokenizer, all_rollouts: List[Dict[str, Any]]) -> Dict
     sft_output = Path(RFT_OUTPUT_DIR) / "sft_run"
     sft_output.mkdir(parents=True, exist_ok=True)
 
-    sft_cfg = build_sft_config(sft_output, tokenizer=tokenizer)
-    trainer = build_sft_trainer(model, tokenizer, ds, sft_cfg)
+    trainer = build_sft_trainer(model, tokenizer, ds, sft_output)
 
     banner(f"Starting SFT on {len(kept)} kept rollouts for {EPOCHS} epochs (lr={SFT_LR})")
     trainer.train()
