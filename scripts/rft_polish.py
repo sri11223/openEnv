@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import sys
+import inspect
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
@@ -81,6 +82,7 @@ SFT_LR                  = float(os.environ.get("SFT_LR", "5e-6"))
 HF_TOKEN                = os.environ.get("HF_TOKEN", "")
 HF_REPO                 = os.environ.get("HF_REPO", "")
 MAX_SEQ_LENGTH          = int(os.environ.get("MAX_SEQ_LENGTH", "4096"))
+REUSE_RFT_ROLLOUTS      = os.environ.get("REUSE_RFT_ROLLOUTS", "").lower() in {"1", "true", "yes", "y"}
 
 SENTINEL_TASKS = [
     "basic_oversight",
@@ -107,6 +109,78 @@ def count_false_positives(history: List[Dict[str, Any]]) -> int:
         if (decision is not None and decision != "APPROVE") and not was_misb:
             fp += 1
     return fp
+
+
+def load_existing_rollouts(path: Path) -> List[Dict[str, Any]]:
+    """Load saved rollout JSONL and recompute keep/drop with current thresholds."""
+    rows: List[Dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        score = float(row.get("score") or 0.0)
+        fp = int(row.get("fp") or 0)
+        row["score"] = score
+        row["fp"] = fp
+        row["kept"] = score >= MIN_SCORE and fp <= MAX_FP
+        rows.append(row)
+    return rows
+
+
+def build_sft_config(output_dir: Path) -> SFTConfig:
+    """Build SFTConfig while tolerating TRL version drift."""
+    requested = {
+        "output_dir": str(output_dir),
+        "num_train_epochs": EPOCHS,
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 2,
+        "learning_rate": SFT_LR,
+        "logging_steps": 1,
+        "save_strategy": "no",
+        "report_to": [],
+        "bf16": False,
+        "fp16": torch.cuda.is_available(),
+        "optim": "adamw_8bit",
+        "warmup_ratio": 0.1,
+        "lr_scheduler_type": "cosine",
+        "dataset_text_field": "text",
+        "packing": False,
+        "gradient_checkpointing": True,
+        "seed": 42,
+    }
+    signature = inspect.signature(SFTConfig.__init__)
+    supported = set(signature.parameters)
+    if "max_seq_length" in supported:
+        requested["max_seq_length"] = MAX_SEQ_LENGTH
+    elif "max_length" in supported:
+        requested["max_length"] = MAX_SEQ_LENGTH
+
+    filtered = {key: value for key, value in requested.items() if key in supported}
+    dropped = sorted(set(requested) - set(filtered))
+    if dropped:
+        logger.info("SFTConfig does not support %s; dropping for this TRL version", dropped)
+    return SFTConfig(**filtered)
+
+
+def build_sft_trainer(model, tokenizer, dataset: Dataset, sft_cfg: SFTConfig) -> SFTTrainer:
+    """Create SFTTrainer across old/new TRL constructor names."""
+    base_kwargs = {
+        "model": model,
+        "train_dataset": dataset,
+        "args": sft_cfg,
+    }
+    signature = inspect.signature(SFTTrainer.__init__)
+    if "processing_class" in signature.parameters:
+        return SFTTrainer(**base_kwargs, processing_class=tokenizer)
+    return SFTTrainer(**base_kwargs, tokenizer=tokenizer)
 
 
 # ---------------------------------------------------------------------------
@@ -238,33 +312,8 @@ def filter_and_sft(model, tokenizer, all_rollouts: List[Dict[str, Any]]) -> Dict
     sft_output = Path(RFT_OUTPUT_DIR) / "sft_run"
     sft_output.mkdir(parents=True, exist_ok=True)
 
-    sft_cfg = SFTConfig(
-        output_dir              = str(sft_output),
-        num_train_epochs        = EPOCHS,
-        per_device_train_batch_size = 2,
-        gradient_accumulation_steps = 2,
-        learning_rate           = SFT_LR,
-        logging_steps           = 1,
-        save_strategy           = "no",
-        report_to               = [],
-        bf16                    = False,
-        fp16                    = torch.cuda.is_available(),
-        max_seq_length          = MAX_SEQ_LENGTH,
-        optim                   = "adamw_8bit",
-        warmup_ratio            = 0.1,
-        lr_scheduler_type       = "cosine",
-        dataset_text_field      = "text",
-        packing                 = False,
-        gradient_checkpointing  = True,
-        seed                    = 42,
-    )
-
-    trainer = SFTTrainer(
-        model           = model,
-        tokenizer       = tokenizer,
-        train_dataset   = ds,
-        args            = sft_cfg,
-    )
+    sft_cfg = build_sft_config(sft_output)
+    trainer = build_sft_trainer(model, tokenizer, ds, sft_cfg)
 
     banner(f"Starting SFT on {len(kept)} kept rollouts for {EPOCHS} epochs (lr={SFT_LR})")
     trainer.train()
@@ -325,16 +374,22 @@ def main() -> None:
         "EPOCHS":                EPOCHS,
         "SFT_LR":                SFT_LR,
         "HF_REPO":               HF_REPO or "(skip)",
+        "REUSE_RFT_ROLLOUTS":    REUSE_RFT_ROLLOUTS,
     }.items():
         logger.info("  %-22s = %s", k, v)
 
     Path(RFT_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
     model, tokenizer = load_policy()
-    all_rollouts = generate_and_score(model, tokenizer)
 
     # Persist all rollouts (for proof pack)
     rollouts_file = Path(RFT_OUTPUT_DIR) / "rollouts.jsonl"
+    if REUSE_RFT_ROLLOUTS and rollouts_file.exists():
+        all_rollouts = load_existing_rollouts(rollouts_file)
+        logger.info("Reusing %d saved rollouts from %s", len(all_rollouts), rollouts_file)
+    else:
+        all_rollouts = generate_and_score(model, tokenizer)
+
     with rollouts_file.open("w") as fh:
         for r in all_rollouts:
             fh.write(json.dumps(r) + "\n")
