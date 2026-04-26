@@ -209,6 +209,33 @@ def build_causal_lm_collator(tokenizer):
     return collate
 
 
+def disable_gradient_checkpointing(model) -> None:
+    """Disable checkpointing paths that can mismatch across Unsloth/Transformers versions."""
+    try:
+        model.gradient_checkpointing_disable()
+    except Exception:
+        pass
+    for module in model.modules():
+        if hasattr(module, "gradient_checkpointing"):
+            try:
+                module.gradient_checkpointing = False
+            except Exception:
+                pass
+        config = getattr(module, "config", None)
+        if config is not None and hasattr(config, "gradient_checkpointing"):
+            try:
+                config.gradient_checkpointing = False
+            except Exception:
+                pass
+    config = getattr(model, "config", None)
+    if config is not None:
+        if hasattr(config, "gradient_checkpointing"):
+            config.gradient_checkpointing = False
+        if hasattr(config, "use_cache"):
+            config.use_cache = False
+    logger.info("Gradient checkpointing disabled for RFT SFT compatibility")
+
+
 def build_sft_trainer(model, tokenizer, dataset: Dataset, output_dir: Path) -> Trainer:
     """Create a plain HF Trainer to avoid TRL EOS-token version bugs."""
     eos_token = resolve_tokenizer_eos(tokenizer)
@@ -228,6 +255,7 @@ def build_sft_trainer(model, tokenizer, dataset: Dataset, output_dir: Path) -> T
         bf16=False,
         fp16=torch.cuda.is_available(),
         optim="adamw_torch",
+        gradient_checkpointing=False,
         warmup_ratio=0.1,
         lr_scheduler_type="cosine",
         remove_unused_columns=False,
@@ -366,6 +394,7 @@ def filter_and_sft(model, tokenizer, all_rollouts: List[Dict[str, Any]]) -> Dict
     # Switch model back to training mode (Unsloth toggles this on for_inference)
     from unsloth import FastLanguageModel
     FastLanguageModel.for_training(model)
+    disable_gradient_checkpointing(model)
 
     sft_output = Path(RFT_OUTPUT_DIR) / "sft_run"
     sft_output.mkdir(parents=True, exist_ok=True)
