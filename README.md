@@ -902,7 +902,7 @@ uvicorn app:app --host 0.0.0.0 --port 7860
 
 ### Tests And Validation
 
-These are the commands judges or reviewers can run to verify the repo locally. The pytest command mirrors GitHub Actions.
+These are the commands judges or reviewers can run to verify the repo locally. The pytest command mirrors GitHub Actions; the current suite is **237 tests** under `tests/`.
 
 ```bash
 pip install -r requirements.txt pytest pytest-asyncio
