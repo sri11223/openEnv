@@ -938,6 +938,26 @@ python scripts/render_training_dashboard.py \
 | **GitHub** | [sri11223/openEnv](https://github.com/sri11223/openEnv) |
 | **Phase 2 Kaggle** | [notebook09bf5fe891](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891) |
 
+### Live Agent Oversight: The Fastest Way To See SENTINEL
+
+Open [the live oversight console](https://srikrishna2005-openenv.hf.space/sentinel/live-oversight). It is the demo path for the core idea: **an AI supervisor sits between any worker agent and execution**.
+
+The page lets a judge paste a Hugging Face Space URL from another agent, choose or auto-detect a domain, submit the worker's proposed action, and watch SENTINEL decide whether that action should be approved, blocked, redirected, or reassigned. If the action is safe, SENTINEL can forward it to the target Space. If it is unsafe, the target never receives the dangerous call.
+
+What happens in the live loop:
+
+1. A worker action arrives from infrastructure, healthcare, finance, social negotiation, or a generic agent.
+2. SENTINEL infers the domain from the action and environment fields, such as `patient_id`, `ticker`, `pod`, `account_id`, or `propose_consensus`.
+3. Pre-checks run before risk scoring: prompt injection, schema violations, suspicious confidence, dangerous action type, and domain mismatch.
+4. Constitutional scoring applies the five oversight principles: minimal blast radius, evidence before action, proportional escalation, reversibility, and domain competence.
+5. Counterfactual risk estimates what could go wrong if the worker action executed unchanged.
+6. SENTINEL returns structured feedback: `decision`, `reason`, `why_blocked`, `required_evidence`, `suggested_fix`, `suggested_action_type`, `reassign_to`, and `trust_impact`.
+7. Only approved or corrected actions are forwarded. Blocked actions are logged, not executed.
+
+This matters because the demo is not just a dashboard for our own benchmark. It shows SENTINEL as a reusable oversight layer for other OpenEnv agents: paste their Space URL, put their proposed action through the gate, and see whether the supervisor catches hallucinations, prompt injection, over-confident execution, missing evidence, domain drift, and high-blast-radius commands before damage happens.
+
+The trained Qwen3 LoRA remains the proof model for the research result. The live Space is optimized for public judging and reliability, so it runs the lightweight SENTINEL middleware and can use the configured LLM worker backend for dynamic proposals without requiring judges to keep a GPU warm.
+
 ---
 
 ## API — Full Endpoint Reference
