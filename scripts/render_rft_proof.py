@@ -320,10 +320,24 @@ def _write_markdown(
     mean_fp_kept = mean([_as_float(row.get("fp")) for row in kept]) if kept else 0.0
     eval_overall = _get(eval_report, "overall", {})
 
+    if eval_overall:
+        intro = (
+            "This folder is the rejection-sampling fine-tuning proof layer. "
+            "It shows which model-generated rollouts were accepted, which were rejected, "
+            "and what the held-out evaluation says after the polish pass."
+        )
+    else:
+        intro = (
+            "This folder is the rejection-sampling fine-tuning proof layer. "
+            "It shows which model-generated rollouts were accepted, which were rejected, "
+            "and which low-false-positive samples were used for the polish pass. "
+            "Held-out model evaluation was intentionally omitted for this proof pack."
+        )
+
     lines = [
         f"# {label} RFT Proof Pack",
         "",
-        "This folder is the rejection-sampling fine-tuning proof layer. It shows which model-generated rollouts were accepted, which were rejected, and what the held-out evaluation says after the polish pass.",
+        intro,
         "",
         "## Summary",
         "",

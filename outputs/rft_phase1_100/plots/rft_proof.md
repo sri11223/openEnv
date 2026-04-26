@@ -1,6 +1,6 @@
-# Phase 1 GRPO + RFT Polish Quick Eval RFT Proof Pack
+# Phase 1 GRPO + RFT Polish RFT Proof Pack
 
-This folder is the rejection-sampling fine-tuning proof layer. It shows which model-generated rollouts were accepted, which were rejected, and what the held-out evaluation says after the polish pass.
+This folder is the rejection-sampling fine-tuning proof layer. It shows which model-generated rollouts were accepted, which were rejected, and which low-false-positive samples were used for the polish pass. Held-out model evaluation was intentionally omitted for this proof pack.
 
 ## Summary
 

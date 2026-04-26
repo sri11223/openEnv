@@ -1,7 +1,7 @@
 {
-  "label": "Phase 1 GRPO + RFT Polish Quick Eval",
-  "rft_dir": "/data/sentinel_outputs_rft_phase1_100",
-  "eval_report_path": "/data/rft_eval_quick/sentinel_held_out_report.json",
+  "label": "Phase 1 GRPO + RFT Polish",
+  "rft_dir": "outputs\\rft_phase1_100",
+  "eval_report_path": "outputs\\rft_phase1_100\\missing_eval.json",
   "total_rollouts": 100,
   "kept_rollouts": 40,
   "keep_rate": 0.4,
