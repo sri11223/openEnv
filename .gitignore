@@ -22,4 +22,5 @@ SENTINEL_ARCHITECTURE.md
 practice_reward_template.py
 *.pdf
 *.txt
+!requirements.txt
 !requirements-train.txt
