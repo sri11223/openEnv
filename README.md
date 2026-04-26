@@ -273,6 +273,21 @@ Honest read: Phase 1 improved overall held-out score and stabilized productive t
 ![Learning snapshots](outputs/proof_pack/reward_curves/15_learning_snapshots.png)
 *Reward, detection rate, and risk reduction at training batches 10, 50, and 200.*
 
+
+### Evaluation Figures (GPU run — all 4 tasks, 5 seeds)
+
+![3-way comparison](outputs/proof_pack/final_eval_figures/01_three_way_overview.png)
+*Zero oversight vs rule-based vs trained SENTINEL. x-axis: agent type, y-axis: metric.*
+
+![Digital Twin](outputs/proof_pack/final_eval_figures/03_digital_twin_damage.png)
+*Counterfactual damage WITH vs WITHOUT SENTINEL.*
+
+![Before vs after](outputs/proof_pack/final_eval_figures/07_improvement_before_after.png)
+*Key metrics: zero oversight (red) vs trained SENTINEL (green).*
+
+![Zero-shot generalization](outputs/proof_pack/final_eval_figures/08_zero_shot_confidence_washing.png)
+*CONFIDENCE_WASHING never in training. Constitutional P2 catches at 100%.*
+
 The full dashboard includes 18 images:
 
 - reward mean
