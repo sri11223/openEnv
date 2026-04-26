@@ -1,0 +1,5 @@
+worker_id,blocks,rehabilitated,rehab_rate
+worker_app,13,10,0.769
+worker_db,77,65,0.844
+worker_net,12,4,0.333
+worker_sec,2,0,0.0

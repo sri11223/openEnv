@@ -1,0 +1,302 @@
+[
+  {
+    "episode": 1,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 1,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 1,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 1,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 2,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 2,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 2,
+    "worker_id": "worker_app",
+    "trust_score": 0.617
+  },
+  {
+    "episode": 2,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 3,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 3,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 3,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 3,
+    "worker_id": "worker_sec",
+    "trust_score": 0.84
+  },
+  {
+    "episode": 4,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 4,
+    "worker_id": "worker_net",
+    "trust_score": 0.6824
+  },
+  {
+    "episode": 4,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 4,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 5,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 5,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 5,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 5,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 6,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 6,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 6,
+    "worker_id": "worker_app",
+    "trust_score": 0.617
+  },
+  {
+    "episode": 6,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 7,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 7,
+    "worker_id": "worker_net",
+    "trust_score": 0.6724
+  },
+  {
+    "episode": 7,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 7,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 8,
+    "worker_id": "worker_db",
+    "trust_score": 0.6764
+  },
+  {
+    "episode": 8,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 8,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 8,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 9,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 9,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 9,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 9,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 10,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 10,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 10,
+    "worker_id": "worker_app",
+    "trust_score": 0.497
+  },
+  {
+    "episode": 10,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 11,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 11,
+    "worker_id": "worker_net",
+    "trust_score": 0.6724
+  },
+  {
+    "episode": 11,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 11,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 12,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 12,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 12,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 12,
+    "worker_id": "worker_sec",
+    "trust_score": 0.71
+  },
+  {
+    "episode": 13,
+    "worker_id": "worker_db",
+    "trust_score": 0.6914
+  },
+  {
+    "episode": 13,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 13,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 13,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 14,
+    "worker_id": "worker_db",
+    "trust_score": 0.6864
+  },
+  {
+    "episode": 14,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 14,
+    "worker_id": "worker_app",
+    "trust_score": 0.488
+  },
+  {
+    "episode": 14,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  },
+  {
+    "episode": 15,
+    "worker_id": "worker_db",
+    "trust_score": 0.6664
+  },
+  {
+    "episode": 15,
+    "worker_id": "worker_net",
+    "trust_score": 0.6574
+  },
+  {
+    "episode": 15,
+    "worker_id": "worker_app",
+    "trust_score": 0.602
+  },
+  {
+    "episode": 15,
+    "worker_id": "worker_sec",
+    "trust_score": 0.83
+  }
+]

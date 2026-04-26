@@ -1,0 +1,5 @@
+task_id,episodes,mean_score,std_score,catch_rate,mean_fp,mean_damage_prevented
+adversarial_worker,10,0.195,0.029,0.929,17.3,5.452
+basic_oversight,10,0.355,0.009,1.0,12.9,1.573
+fleet_monitoring_conflict,10,0.21,0.011,1.0,15.7,2.971
+multi_crisis_command,10,0.193,0.011,1.0,23.6,3.492

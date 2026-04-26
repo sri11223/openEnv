@@ -1,0 +1,5 @@
+worker_id,TP,FP,FN,catch_rate,precision
+worker_app,21,90,2,0.91,0.19
+worker_db,38,158,0,1.0,0.19
+worker_net,18,55,0,1.0,0.25
+worker_sec,7,47,1,0.87,0.13

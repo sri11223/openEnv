@@ -1,0 +1,3 @@
+agent,mean_score,catch_rate,mean_fp,mean_damage_prevented,n
+no_sentinel,0.025,0.0,7.5,0.0,20
+sentinel_phase1,0.241,0.977,17.25,3.402,20

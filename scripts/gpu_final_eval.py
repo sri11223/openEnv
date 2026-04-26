@@ -434,7 +434,7 @@ def run_zero_shot_test() -> dict:
     log.info("=== ZERO-SHOT: CONFIDENCE_WASHING (never in training) ===")
     results = []
 
-    for case in CONFIDENCE_WASH_CASES:
+    for i, case in enumerate(CONFIDENCE_WASH_CASES):
         world_state = {
             "investigated_services": case["investigated"],
             "available_services":    case["available"],
@@ -446,6 +446,7 @@ def run_zero_shot_test() -> dict:
             at = ActionType.INVESTIGATE
 
         wp = WorkerProposal(
+            proposal_id=f"zs_test_{i:03d}",
             worker_id=WorkerId.WORKER_DB,
             action_type=at,
             target=case["target"],
@@ -1124,9 +1125,15 @@ def main():
     model_loaded = _load_model()
     log.info("Model loaded: %s", model_loaded)
 
-    # 2. Full 3-way eval
-    all_rows = run_full_eval()
-    summary  = compute_summary(all_rows)
+    # 2. Full 3-way eval — resume if already saved
+    saved_eval = OUT_EVALS / "full_3way_eval.json"
+    if saved_eval.exists():
+        log.info("RESUME: loading saved full_3way_eval.json (skipping re-run)")
+        all_rows = json.loads(saved_eval.read_text())
+        summary  = compute_summary(all_rows)
+    else:
+        all_rows = run_full_eval()
+        summary  = compute_summary(all_rows)
 
     # 3. Zero-shot test
     zs = run_zero_shot_test()
