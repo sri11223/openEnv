@@ -1,0 +1,17 @@
+{
+  "label": "Phase 1 GRPO + RFT Polish Quick Eval",
+  "rft_dir": "/data/sentinel_outputs_rft_phase1_100",
+  "eval_report_path": "/data/rft_eval_quick/sentinel_held_out_report.json",
+  "total_rollouts": 100,
+  "kept_rollouts": 40,
+  "keep_rate": 0.4,
+  "images": [
+    "01_rft_keep_drop_by_task.png",
+    "02_rft_score_distribution.png",
+    "03_rft_false_positive_distribution.png",
+    "04_rft_score_vs_fp_filter.png",
+    "05_rft_rollout_timeline.png",
+    "06_rft_eval_overview.png",
+    "07_rft_eval_task_delta.png"
+  ]
+}
