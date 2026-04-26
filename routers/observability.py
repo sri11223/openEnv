@@ -37,6 +37,41 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
+# Native OpenEnv mount info (prevents 404 at /openenv root)
+# ---------------------------------------------------------------------------
+
+@router.get("/openenv")
+async def openenv_root():
+    """Info endpoint for the native OpenEnv sub-mount.
+
+    The OpenEnv adapter is mounted at ``/openenv`` and exposes the standard
+    schema / reset / step / state / ws contract.  This route is registered on
+    the main app so that ``GET /openenv`` (no trailing path) returns helpful
+    info instead of a 404.
+    """
+    return {
+        "name": "SENTINEL native OpenEnv adapter",
+        "description": (
+            "Exposes the SENTINEL oversight environment through the standard "
+            "OpenEnv Environment base-class contract for OpenEnv-compatible clients."
+        ),
+        "mount": "/openenv",
+        "endpoints": {
+            "schema": "/openenv/schema",
+            "reset": "/openenv/reset",
+            "step": "/openenv/step",
+            "state": "/openenv/state",
+            "websocket": "/openenv/ws",
+        },
+        "note": (
+            "If native_openenv_available is false in /health, the openenv package "
+            "is not installed in this environment. Use the standard /reset, /step, "
+            "/state, /sentinel/reset, /sentinel/step endpoints instead."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Metrics / telemetry
 # ---------------------------------------------------------------------------
 

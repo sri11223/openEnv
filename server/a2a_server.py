@@ -283,6 +283,29 @@ def _handle_tasks_cancel(params: Dict[str, Any]) -> Dict[str, Any]:
     return task.to_dict()
 
 
+def _handle_message_send(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle message/send (A2A v0.3+) — normalize schema and delegate to tasks/send.
+
+    A2A v0.3 changed the method name from ``tasks/send`` to ``message/send`` and
+    uses ``kind`` instead of ``type`` in message parts.  This adapter normalises
+    the new envelope so SENTINEL can be reached by both v0.2 and v0.3 clients.
+    """
+    raw_message = params.get("message", {})
+    # Normalise parts: A2A v0.3 uses "kind", v0.2 uses "type"
+    normalized_parts = []
+    for part in raw_message.get("parts", []):
+        p = dict(part)
+        if "kind" in p and "type" not in p:
+            p["type"] = p.pop("kind")
+        normalized_parts.append(p)
+    normalized_message = {
+        "parts": normalized_parts,
+        "role": raw_message.get("role", "user"),
+    }
+    task_id = params.get("id", str(uuid.uuid4()))
+    return _handle_tasks_send({"id": task_id, "message": normalized_message})
+
+
 # ---------------------------------------------------------------------------
 # FastAPI Router
 # ---------------------------------------------------------------------------
@@ -316,6 +339,8 @@ async def a2a_endpoint(request: Request):
         "tasks/send": _handle_tasks_send,
         "tasks/get": _handle_tasks_get,
         "tasks/cancel": _handle_tasks_cancel,
+        "message/send": _handle_message_send,   # A2A v0.3+ alias
+        "message/stream": _handle_message_send,  # A2A v0.3+ streaming (sync fallback)
     }
 
     handler = handlers.get(method)

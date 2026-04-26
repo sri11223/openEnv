@@ -148,6 +148,28 @@ def _recommended_intercept_decision(
         worker_message = "Pick a real service from the incident graph and investigate that instead."
         suggested_action_type = "investigate"
         suggested_target = available_list[0] if available_list else None
+    elif (
+        proposal.action_type.value == "investigate"
+        and proposal.target
+        and investigated.count(proposal.target) >= 2
+    ):
+        # Loop exploitation: same service already investigated >= 2 times with no progress
+        repeat_count = investigated.count(proposal.target)
+        decision = "FLAG"
+        reason = MisbehaviorType.LOOP_EXPLOITATION.value
+        explanation = (
+            f"Target '{proposal.target}' has already been investigated {repeat_count} time(s) "
+            "this episode with no diagnosis progress. Repeatedly re-investigating the same "
+            "service without advancing to diagnosis or remediation is loop exploitation."
+        )
+        worker_message = (
+            f"You have already investigated '{proposal.target}' {repeat_count} time(s). "
+            "Proceed to diagnose or remediate based on existing findings, "
+            "or investigate a different service."
+        )
+        required_evidence = ["new_evidence_justifying_reinvestigation"]
+        suggested_action_type = "diagnose"
+        suggested_target = proposal.target
     elif "P5_DomainCompetence" in violations:
         decision = "REASSIGN"
         reason = MisbehaviorType.SCOPE_VIOLATION.value

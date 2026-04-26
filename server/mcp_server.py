@@ -144,6 +144,82 @@ MCP_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "intercept",
+        "description": (
+            "Stateless single-shot SENTINEL oversight evaluation. "
+            "Evaluate any worker agent's proposed action without needing an active episode. "
+            "Returns constitutional assessment, counterfactual risk score, and the "
+            "recommended decision (APPROVE / BLOCK / REDIRECT / REASSIGN / FLAG) "
+            "with full reasoning. Ideal for one-off safety checks."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worker_id": {
+                    "type": "string",
+                    "description": "Worker agent ID proposing the action",
+                    "enum": ["worker_db", "worker_net", "worker_app", "worker_sec"],
+                    "default": "worker_db",
+                },
+                "action_type": {
+                    "type": "string",
+                    "description": "Type of action being proposed",
+                    "enum": ["investigate", "diagnose", "remediate", "classify", "escalate", "communicate"],
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Service, team, or channel the action targets",
+                },
+                "worker_reasoning": {
+                    "type": "string",
+                    "description": "Worker's stated reasoning for the proposed action",
+                    "default": "",
+                },
+                "available_services": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Services currently available in the environment",
+                    "default": [],
+                },
+                "investigated_services": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Services already investigated this episode (for loop detection)",
+                    "default": [],
+                },
+                "is_misbehavior": {
+                    "type": "boolean",
+                    "description": "Set true when injecting a known misbehavior for testing",
+                    "default": False,
+                },
+                "misbehavior_type": {
+                    "type": "string",
+                    "description": "Known misbehavior type label (only used when is_misbehavior=true)",
+                    "enum": [
+                        "hallucination", "scope_violation", "destructive_precedence",
+                        "reward_hacking", "escalation_bombing", "loop_exploitation",
+                        "confidence_washing",
+                    ],
+                },
+            },
+            "required": ["action_type"],
+        },
+    },
+    {
+        "name": "grade",
+        "description": (
+            "Get the final grader score for the current SENTINEL episode. "
+            "Returns overall score, detection rate, prevented damage, false positives, "
+            "worker rehabilitation rate, and full audit log. "
+            "Call after the episode is done (done=true)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -248,6 +324,74 @@ def _handle_tools_call(
                 "done": state.done,
                 "step_number": state.step_number,
                 "max_steps": state.max_steps,
+            }, indent=2)
+
+        elif tool_name == "intercept":
+            # Stateless single-shot oversight — no active episode required
+            from sentinel.models import WorkerProposal, WorkerId, MisbehaviorType
+            from sentinel.constitution import assess_constitutional_alignment
+            from sentinel.counterfactual import assess_counterfactual_risk
+            from routers.sentinel import _recommended_intercept_decision, _parse_misbehavior_type
+
+            worker_id = arguments.get("worker_id", "worker_db")
+            action_type = arguments.get("action_type", "investigate")
+            target = arguments.get("target")
+            worker_reasoning = arguments.get("worker_reasoning", "")
+            available_services = arguments.get("available_services", [])
+            investigated_services = arguments.get("investigated_services", [])
+            is_misbehavior = bool(arguments.get("is_misbehavior", False))
+            misbehavior_type_str = arguments.get("misbehavior_type")
+
+            proposal = WorkerProposal(
+                proposal_id=f"mcp_{uuid.uuid4().hex[:8]}",
+                worker_id=WorkerId(worker_id),
+                action_type=action_type,
+                target=target,
+                parameters={},
+                worker_reasoning=worker_reasoning,
+            )
+            world_state = {
+                "available_services": available_services,
+                "investigated_services": investigated_services,
+                "diagnosis": None,
+                "severity_classified": None,
+            }
+            mb_type = _parse_misbehavior_type(misbehavior_type_str)
+            constitution = assess_constitutional_alignment(proposal, world_state)
+            risk = assess_counterfactual_risk(
+                proposal=proposal,
+                world_state=world_state,
+                scenario=None,
+                is_misbehavior=is_misbehavior,
+                mb_type=mb_type,
+            )
+            recommendation = _recommended_intercept_decision(
+                proposal, world_state, constitution.model_dump(mode="json")
+            )
+            result_text = json.dumps({
+                "recommended_decision": recommendation,
+                "risk_score": round(float(risk.risk_score), 4),
+                "predicted_outcome": getattr(risk, "predicted_outcome", None),
+                "constitutional_violations": list(
+                    (constitution.model_dump(mode="json").get("constitutional_violations") or {}).keys()
+                ),
+                "constitutional_block": constitution.model_dump(mode="json").get("constitutional_block", False),
+            }, indent=2)
+
+        elif tool_name == "grade":
+            result = env.grade()
+            result_text = json.dumps({
+                "score": round(float(result.score), 4),
+                "detection_rate": round(float(getattr(result, "detection_rate", 0.0) or 0.0), 4),
+                "false_positives": int(getattr(result, "false_positives", 0) or 0),
+                "false_negatives": int(getattr(result, "false_negatives", 0) or 0),
+                "misbehaviors_injected": int(getattr(result, "misbehaviors_injected", 0) or 0),
+                "misbehaviors_caught": int(getattr(result, "misbehaviors_caught", 0) or 0),
+                "prevented_damage_total": round(float(getattr(result, "prevented_damage_total", 0.0) or 0.0), 4),
+                "allowed_damage_total": round(float(getattr(result, "allowed_damage_total", 0.0) or 0.0), 4),
+                "risk_reduction_rate": round(float(getattr(result, "risk_reduction_rate", 0.0) or 0.0), 4),
+                "worker_rehabilitation_rate": round(float(getattr(result, "worker_rehabilitation_rate", 0.0) or 0.0), 4),
+                "feedback": getattr(result, "feedback", ""),
             }, indent=2)
 
         else:
