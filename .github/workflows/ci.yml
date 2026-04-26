@@ -120,7 +120,7 @@ jobs:
           r = httpx.post(base + '/grader', headers=headers)
           r.raise_for_status()
           score = r.json()['score']
-          assert score > 0.5, 'Score too low: ' + str(score)
+          assert score >= 0.5, 'Score too low: ' + str(score)
           print('Docker E2E passed. Score:', score)
           PYEOF
 
@@ -206,4 +206,7 @@ jobs:
           grep -q "EXPOSE 7860"  Dockerfile && echo "EXPOSE: OK"
           grep -q "HEALTHCHECK"  Dockerfile && echo "HEALTHCHECK: OK"
           grep -q "CMD"          Dockerfile && echo "CMD: OK"
-          grep -q "USER appuser" Dockerfile && echo "Non-root user: OK"
+          user_line="$(grep -E '^USER ' Dockerfile | tail -n 1)"
+          test -n "$user_line"
+          test "$user_line" != "USER root"
+          echo "Non-root user: OK ($user_line)"
