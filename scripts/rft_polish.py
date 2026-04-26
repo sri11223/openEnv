@@ -197,11 +197,23 @@ def build_sft_config(output_dir: Path, tokenizer=None) -> SFTConfig:
     dropped = sorted(set(requested) - set(filtered))
     if dropped:
         logger.info("SFTConfig does not support %s; dropping for this TRL version", dropped)
-    return SFTConfig(**filtered)
+    cfg = SFTConfig(**filtered)
+    # Some TRL builds keep their internal default <EOS_TOKEN> even when the
+    # constructor accepts eos_token. Force the resolved tokenizer token onto the
+    # config after construction so SFTTrainer cannot fall back to an invalid EOS.
+    if eos_token:
+        setattr(cfg, "eos_token", eos_token)
+        logger.info("Final SFTConfig eos_token=%s", getattr(cfg, "eos_token", None))
+    return cfg
 
 
 def build_sft_trainer(model, tokenizer, dataset: Dataset, sft_cfg: SFTConfig) -> SFTTrainer:
     """Create SFTTrainer across old/new TRL constructor names."""
+    eos_token = resolve_tokenizer_eos(tokenizer)
+    if eos_token:
+        tokenizer.eos_token = eos_token
+        setattr(sft_cfg, "eos_token", eos_token)
+        logger.info("Preparing SFTTrainer with tokenizer/config eos_token=%s", eos_token)
     base_kwargs = {
         "model": model,
         "train_dataset": dataset,
