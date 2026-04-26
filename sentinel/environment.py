@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import uuid
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
@@ -80,6 +81,28 @@ _MULTI_CRISIS_INCIDENTS = 3
 _RECENT_WINDOW = 5
 
 
+def _make_worker_fleet():
+    """Build the worker fleet backend.
+
+    The default is the deterministic benchmark fleet used for reproducible
+    training and evaluation. Setting SENTINEL_WORKER_BACKEND=groq or hybrid
+    switches runtime demos to LLM-generated worker proposals while preserving
+    rule-based fallback behavior when the external API is unavailable.
+    """
+    backend = os.getenv("SENTINEL_WORKER_BACKEND", "rule").strip().lower()
+    if backend in {"groq", "hybrid", "llm"}:
+        try:
+            from sentinel.llm_workers import LLMWorkerFleet
+
+            mode = "hybrid" if backend in {"hybrid", "llm"} else "groq"
+            groq_model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+            logger.info("SENTINEL worker backend=%s model=%s", mode, groq_model)
+            return LLMWorkerFleet(mode=mode, groq_model=groq_model)
+        except Exception as exc:  # pragma: no cover - defensive runtime fallback
+            logger.warning("LLM worker backend unavailable, using deterministic workers: %s", exc)
+    return WorkerFleet()
+
+
 class SentinelEnv:
     """AI Oversight environment.
 
@@ -107,7 +130,7 @@ class SentinelEnv:
     ) -> None:
         self._irt_env = IncidentResponseEnv()
         self._incident_envs: List[IncidentResponseEnv] = [self._irt_env]
-        self._fleet = WorkerFleet()
+        self._fleet = _make_worker_fleet()
         self._eval_mode = eval_mode
         self._enforce_trust_gate = enforce_trust_gate
         self._enable_corrective_loop = enable_corrective_loop

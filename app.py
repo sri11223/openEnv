@@ -189,6 +189,7 @@ except Exception as exc:  # pragma: no cover
 @app.get("/health")
 async def health_check():
     """Standard OpenEnv health check."""
+    worker_backend = os.environ.get("SENTINEL_WORKER_BACKEND", "rule")
     return {
         "status": "healthy",
         "native_openenv_available": NATIVE_OPENENV_AVAILABLE,
@@ -197,11 +198,14 @@ async def health_check():
         "mcp_endpoint": "/mcp" if MCP_AVAILABLE else None,
         "a2a_available": A2A_AVAILABLE,
         "a2a_agent_card": "/.well-known/agent.json" if A2A_AVAILABLE else None,
+        "sentinel_worker_backend": worker_backend,
+        "llm_worker_configured": bool(os.environ.get("GROQ_API_KEY")),
     }
 
 
 def _service_info():
     """Return environment info and live telemetry for JSON endpoints."""
+    worker_backend = os.environ.get("SENTINEL_WORKER_BACKEND", "rule")
     return {
         "status": "ok",
         "environment": "sentinel-oversight-command",
@@ -220,6 +224,8 @@ def _service_info():
             "mcp": MCP_AVAILABLE,
             "a2a": A2A_AVAILABLE,
         },
+        "sentinel_worker_backend": worker_backend,
+        "llm_worker_configured": bool(os.environ.get("GROQ_API_KEY")),
         "active_sessions": len(_SESSION_REGISTRY),
         "ws_active_connections": _deps.WS_ACTIVE_CONNECTIONS,
         "telemetry": _TELEMETRY,
