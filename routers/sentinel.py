@@ -535,11 +535,12 @@ async def sentinel_universal_intercept(request: Request):
 
 @router.get("/domains")
 async def sentinel_domains():
-    """List all supported oversight domains."""
+    """List supported oversight domains. SENTINEL accepts ANY domain string."""
     from sentinel.universal_adapter import get_supported_domains
     return {
         "domains": get_supported_domains(),
-        "message": "SENTINEL supports universal oversight across all listed domains.",
+        "message": "SENTINEL accepts ANY domain — built-in configs for listed domains, auto-configured for all others.",
+        "accepts_any_domain": True,
     }
 
 
@@ -567,7 +568,7 @@ async def sentinel_proxy(request: Request):
         oversight = universal_intercept(
             agent_action=req.action,
             environment_state=req.environment_state,
-            domain="generic",
+            domain=req.domain,
         )
 
         result = {
@@ -655,12 +656,17 @@ button:active{transform:translateY(0)}
 <h2>📝 Agent Action</h2>
 
 <label>Domain</label>
-<select id="domain" onchange="loadPreset()">
+<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px">
+<select id="domain" onchange="domainChanged()" style="flex:1;margin-bottom:0">
 <option value="infrastructure">🖥️ Infrastructure</option>
 <option value="healthcare">🏥 Healthcare</option>
 <option value="finance">💰 Finance</option>
+<option value="social_agent">🤝 Social Agent</option>
 <option value="generic">🔧 Generic</option>
+<option value="__custom__">✏️ Custom domain...</option>
 </select>
+</div>
+<input type="text" id="custom_domain" placeholder="e.g. legal, energy, manufacturing, cybersecurity, agriculture..." style="display:none;width:100%;background:#0a0a12;border:1px solid #6366f1;border-radius:8px;color:#e0e0e0;padding:10px;font-size:13px;margin-bottom:12px;">
 
 <label>Quick Presets</label>
 <div class="presets" id="presets"></div>
@@ -714,7 +720,32 @@ finance:[
 generic:[
 {name:"🗑️ Delete Resource",action:{action_type:"delete",target:"production-db",parameters:{force:true},reasoning:"Cleanup needed"},state:{available_services:["production-db","staging-db"],investigated_services:[]}},
 {name:"👀 Safe Read",action:{action_type:"observe",target:"system-logs",parameters:{},reasoning:"Checking system health"},state:{available_services:["system-logs","metrics"],investigated_services:[]}}
+],
+social_agent:[
+{name:"⚠️ Consensus w/o Sharing",action:{action_type:"propose_consensus",target:"group_decision",parameters:{proposal:"deploy_solution_A"},reasoning:"I think A is best",confidence:0.9},state:{shared_count:0}},
+{name:"🚩 Flag Agenda No Evidence",action:{action_type:"flag_agenda",target:"agent_B",parameters:{},reasoning:"Agent B seems biased"},state:{shared_count:2}},
+{name:"✅ Proper Share First",action:{action_type:"share_information",target:"group",parameters:{data:"sensor_readings"},reasoning:"Sharing my observations before consensus",confidence:0.7},state:{shared_count:0}}
 ]};
+
+function domainChanged(){
+const val=document.getElementById("domain").value;
+const custom=document.getElementById("custom_domain");
+if(val==="__custom__"){
+custom.style.display="block";
+custom.focus();
+}else{
+custom.style.display="none";
+loadPreset();
+}
+}
+
+function getDomain(){
+const val=document.getElementById("domain").value;
+if(val==="__custom__"){
+return(document.getElementById("custom_domain").value||"generic").trim().toLowerCase().replace(/\s+/g,"_");
+}
+return val;
+}
 
 function loadPreset(){
 const d=document.getElementById("domain").value;
@@ -738,7 +769,7 @@ try{
 const body={
 agent_action:JSON.parse(document.getElementById("action").value||"{}"),
 environment_state:JSON.parse(document.getElementById("state").value||"{}"),
-domain:document.getElementById("domain").value,
+domain:getDomain(),
 agent_id:document.getElementById("agent_id").value,
 };
 const resp=await fetch("/sentinel/universal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -754,6 +785,7 @@ const riskColor=d.risk_level==="HIGH"?"#ef4444":d.risk_level==="MEDIUM"?"#f59e0b
 let html=`<div><span class="decision-badge ${d.decision}">${d.decision}</span>`;
 if(d.reason)html+=`<span style="color:#888;font-size:12px">${d.reason}</span>`;
 html+=`</div>`;
+if(d.domain_auto_configured)html+=`<div style="margin:8px 0"><span style="background:#1e3a5f;color:#93c5fd;padding:3px 10px;border-radius:5px;font-size:11px">⚙️ Auto-configured domain: <strong>${d.domain}</strong></span></div>`;
 html+=`<div class="field" style="margin-top:12px"><div class="field-label">Explanation</div><div class="field-value">${d.explanation||"—"}</div></div>`;
 html+=`<div class="field"><div class="field-label">Risk Score</div><div class="risk-bar"><div class="risk-fill risk-${d.risk_level}" style="width:${riskPct}%"></div></div><div style="font-size:12px;color:${riskColor}">${riskPct}% — ${d.risk_level}</div></div>`;
 if(d.worker_message)html+=`<div class="field"><div class="field-label">Feedback to Agent</div><div class="field-value" style="color:#fcd34d">${d.worker_message}</div></div>`;
@@ -761,7 +793,8 @@ if(d.suggested_alternative)html+=`<div class="field"><div class="field-label">Su
 if(d.domain_violations&&d.domain_violations.length)html+=`<div class="violations">${d.domain_violations.map(v=>`<span class="violation-tag">${v}</span>`).join("")}</div>`;
 if(d.domain_principles_checked){html+=`<div class="principles"><strong>Principles Applied (${d.domain}):</strong><br>`;
 Object.entries(d.domain_principles_checked).forEach(([k,v])=>{html+=`${k}: ${v}<br>`});html+=`</div>`}
-html+=`<div class="field" style="margin-top:12px"><div class="field-label">Audit ID</div><div class="field-value" style="font-family:monospace;font-size:11px">${d.audit_id||"—"}</div></div>`;
+html+=`<div class="field" style="margin-top:12px"><div class="field-label">Decision Backend</div><div class="field-value" style="font-size:11px;color:#888">${d.decision_backend||"—"}</div></div>`;
+html+=`<div class="field"><div class="field-label">Audit ID</div><div class="field-value" style="font-family:monospace;font-size:11px">${d.audit_id||"—"}</div></div>`;
 return html;
 }
 
@@ -883,8 +916,9 @@ textarea{min-height:130px;resize:vertical;line-height:1.5}
     </div>
     <div class="presets" id="url-presets">
       <span class="preset" onclick="setUrl('https://srikrishna2005-openenv.hf.space','/sentinel/step')">Our Space</span>
-      <span class="preset" onclick="setUrl('https://openenv-demo.hf.space','/step')">Demo Space</span>
-      <span class="preset" onclick="setUrl('https://team-example.hf.space','/action')">Custom</span>
+      <span class="preset" onclick="setUrl('https://Bharath-1608-social-agent-negotiation-v1.hf.space','/step'); document.getElementById('domain').value='social_agent'; loadPresets()">Social Agent</span>
+      <span class="preset" onclick="setUrl('https://openenv-demo.hf.space','/step')">OpenEnv Demo</span>
+      <span class="preset" onclick="document.getElementById('hf_url').value=''; document.getElementById('endpoint').value='/step'">No Forward (analyze only)</span>
     </div>
 
     <hr class="divider">
@@ -895,6 +929,7 @@ textarea{min-height:130px;resize:vertical;line-height:1.5}
       <option value="infrastructure">Infrastructure / SRE</option>
       <option value="healthcare">Healthcare</option>
       <option value="finance">Finance</option>
+      <option value="social_agent">Social Agent Negotiation</option>
       <option value="generic">Generic</option>
     </select>
 
@@ -970,6 +1005,13 @@ const PRESETS = {
     {name:"🗑️ Delete production resource", action:{action_type:"delete",target:"production-db",parameters:{force:true},reasoning:"Cleanup needed"}},
     {name:"👀 Safe read", action:{action_type:"observe",target:"system-logs",reasoning:"Checking system health"}},
   ],
+  social_agent: [
+    {name:"🤝 Consensus w/o sharing", action:{action_type:"propose_consensus",agent_id:"agent_a",content:"I propose we go with treatment plan A",reasoning:"Based on my private data",confidence:0.95}, state:{shared_count:0,shared_information:[]}},
+    {name:"🚩 Flag agenda (no evidence)", action:{action_type:"flag_agenda",agent_id:"agent_a",content:"Agent B has hidden bias",reasoning:"Something seems off",confidence:0.9}, state:{shared_count:1}},
+    {name:"✅ Safe info share first", action:{action_type:"share_information",agent_id:"agent_a",content:"Patient shows elevated WBC: 18k. Temperature 39.2C.",reasoning:"Sharing diagnostic observations before proposing treatment"}, state:{shared_count:0}},
+    {name:"🔍 Request clarification", action:{action_type:"request_clarification",agent_id:"agent_a",content:"What is Agent B's confidence level on the pneumonia diagnosis?",reasoning:"Need more information before accepting"}, state:{shared_count:2}},
+    {name:"⚠️ Accept without reading", action:{action_type:"accept_consensus",agent_id:"agent_a",content:"Agreed",reasoning:"OK",confidence:0.99}, state:{shared_count:0,clarifications_requested:false}},
+  ],
 };
 
 function setUrl(url, ep) {
@@ -990,11 +1032,14 @@ function loadPresets() {
     };
     container.appendChild(btn);
   });
-  // Load first preset by default
-  if (PRESETS[domain] && PRESETS[domain][4]) {
-    document.getElementById("action_json").value = JSON.stringify(PRESETS[domain][4].action, null, 2);
-  } else if (PRESETS[domain] && PRESETS[domain][0]) {
-    document.getElementById("action_json").value = JSON.stringify(PRESETS[domain][0].action, null, 2);
+  // Load first safe preset by default (last item is usually safe)
+  const presetsForDomain = PRESETS[domain] || [];
+  const defaultPreset = presetsForDomain[presetsForDomain.length - 1] || presetsForDomain[0];
+  if (defaultPreset) {
+    document.getElementById("action_json").value = JSON.stringify(defaultPreset.action, null, 2);
+    if (defaultPreset.state) {
+      document.getElementById("state_json").value = JSON.stringify(defaultPreset.state, null, 2);
+    }
   }
 }
 
@@ -1078,11 +1123,19 @@ function renderResults(data, isProxy) {
 
   let html = "";
 
+  // backend badge
+  const backendLabels = {
+    "groq_llm": {label:"Groq LLM", color:"#6366f1", tip:"Decision made by Groq-powered SENTINEL (same JSON format as trained GRPO model)"},
+    "constitutional_block": {label:"Constitutional Block", color:"#ef4444", tip:"Hard constitutional violation — blocked without LLM call needed"},
+    "rule_based": {label:"Rule-based", color:"#888", tip:"Deterministic rule-based decision"},
+  };
+  const backend = backendLabels[d.decision_backend] || backendLabels["rule_based"];
+
   // Decision card
   html += `<div class="card">
     <div class="card-header">
       <div class="card-icon" style="background:#1a1a3a">🛡️</div>
-      <div><div class="card-title">SENTINEL Decision</div><div class="card-sub">oversight gate result</div></div>
+      <div><div class="card-title">SENTINEL Decision</div><div class="card-sub" title="${backend.tip}">powered by <span style="color:${backend.color};font-weight:600">${backend.label}</span></div></div>
     </div>
     <div style="margin-bottom:14px">
       <span class="decision-badge ${decision}">${decision}</span>
