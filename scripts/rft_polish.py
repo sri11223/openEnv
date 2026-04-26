@@ -254,7 +254,7 @@ def build_sft_trainer(model, tokenizer, dataset: Dataset, output_dir: Path) -> T
         save_strategy="no",
         report_to=[],
         bf16=False,
-        fp16=torch.cuda.is_available(),
+        fp16=False,
         optim="adamw_torch",
         gradient_checkpointing=False,
         warmup_ratio=0.1,
