@@ -844,7 +844,23 @@ class SentinelEnv:
 
     def _next_worker_proposal(self, step_number: int):
         """Generate the next worker proposal exactly once for observation and step."""
-        return self._fleet.get_next_proposal(self._fleet_world_state(), step_number)
+        world_state = self._fleet_world_state()
+        try:
+            return self._fleet.get_next_proposal(world_state, step_number)
+        except Exception as exc:
+            logger.warning("worker fleet proposal failed; using deterministic fallback: %s", exc)
+            fallback = getattr(self._fleet, "_rule_fleet", None)
+            if fallback is not None:
+                return fallback.get_next_proposal(world_state, step_number)
+            self._fleet = WorkerFleet()
+            if self._task_id is not None:
+                self._fleet.setup(
+                    self._task_id,
+                    variant_seed=self._variant_seed,
+                    eval_mode=self._eval_mode,
+                )
+                self._worker_records = self._fleet.get_records()
+            return self._fleet.get_next_proposal(world_state, step_number)
 
     def _parse_decision(self, raw: Dict[str, Any]) -> SentinelDecision:
         """Parse a dict (from LLM JSON output) into a SentinelDecision.
