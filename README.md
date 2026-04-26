@@ -835,9 +835,9 @@ Goal: improve precision. Phase 1 learned to catch everything. RFT teaches SENTIN
 
 ### Phase 2 — Kaggle, 140 additional GRPO steps
 
-[→ Kaggle training notebook](https://www.kaggle.com/code/srikrishnanutalapati/notebook09bf5fe891)
+[→ Kaggle training notebook](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)
 
-Repo notebook for verification: [notebooks/sentinel_deep_eval.ipynb](notebooks/sentinel_deep_eval.ipynb)  and it runned in kaggle[kaggle link](xhttps://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f)- run this notebook on Kaggle; it is not intended as a local CPU demo.
+Repo notebook for verification: [notebooks/sentinel_deep_eval.ipynb](notebooks/sentinel_deep_eval.ipynb) — also verified on Kaggle: [kaggle link](https://www.kaggle.com/code/nutalapatisrikrishna/notebook7a0fc4f33f). Run this notebook on Kaggle; it is not intended as a local CPU demo.
 
 140 additional GRPO steps targeting adversarial_worker and multi_crisis_command (the tasks with the highest FP rates). Focus: reduce over-blocking on complex scenarios while maintaining catch rate.
 
@@ -900,6 +900,24 @@ python validate.py
 uvicorn app:app --host 0.0.0.0 --port 7860
 ```
 
+### Tests And Validation
+
+These are the commands judges or reviewers can run to verify the repo locally. The pytest command mirrors GitHub Actions.
+
+```bash
+pip install -r requirements.txt pytest pytest-asyncio
+python -m pytest tests/ -v --tb=short
+python validate.py
+```
+
+For a faster smoke check while editing SENTINEL code:
+
+```bash
+python -m pytest -q tests/test_sentinel.py tests/test_universal_adapter.py tests/test_training_sync.py
+```
+
+Use `python -m pytest tests/`, not bare `pytest`, because the repository also contains archived hackathon artifacts and generated analysis folders that are not part of the CI test target.
+
 Run a SENTINEL demo:
 ```bash
 python scripts/demo_sentinel.py --task basic_oversight --seed 0 --agent rule
@@ -945,7 +963,7 @@ python scripts/render_training_dashboard.py \
 
 Open [the live oversight console](https://srikrishna2005-openenv.hf.space/sentinel/live-oversight). It is the demo path for the core idea: **an AI supervisor sits between any worker agent and execution**.
 
-The page allows  to paste another team's deployed Hugging Face Space link, choose or auto-detect a domain, submit the worker's proposed action, and watch SENTINEL decide whether that action should be approved, blocked, redirected, or reassigned. If the action is safe, SENTINEL can forward it to the target Space. If it is unsafe, the target never receives the dangerous call.
+The page allows a judge to paste another team's deployed Hugging Face Space link, choose or auto-detect a domain, submit the worker's proposed action, and watch SENTINEL decide whether that action should be approved, blocked, redirected, or reassigned. If the action is safe, SENTINEL can forward it to the target Space. If it is unsafe, the target never receives the dangerous call.
 
 What happens in the live loop:
 
