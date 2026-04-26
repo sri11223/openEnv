@@ -942,7 +942,7 @@ python scripts/render_training_dashboard.py \
 
 Open [the live oversight console](https://srikrishna2005-openenv.hf.space/sentinel/live-oversight). It is the demo path for the core idea: **an AI supervisor sits between any worker agent and execution**.
 
-The page lets a judge paste another team's deployed Hugging Face Space link, choose or auto-detect a domain, submit the worker's proposed action, and watch SENTINEL decide whether that action should be approved, blocked, redirected, or reassigned. If the action is safe, SENTINEL can forward it to the target Space. If it is unsafe, the target never receives the dangerous call.
+The page allows  to paste another team's deployed Hugging Face Space link, choose or auto-detect a domain, submit the worker's proposed action, and watch SENTINEL decide whether that action should be approved, blocked, redirected, or reassigned. If the action is safe, SENTINEL can forward it to the target Space. If it is unsafe, the target never receives the dangerous call.
 
 What happens in the live loop:
 
