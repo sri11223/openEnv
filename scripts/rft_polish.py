@@ -51,8 +51,8 @@ sys.path.insert(0, str(ROOT))
 
 import torch
 from datasets import Dataset
-from peft import PeftModel
-from transformers import Trainer, TrainingArguments
+from peft import PeftModel, prepare_model_for_kbit_training
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, Trainer, TrainingArguments
 
 from training.episodes import run_episode_with_completion
 from training.prompts import build_prompt_record
@@ -81,6 +81,7 @@ HF_TOKEN                = os.environ.get("HF_TOKEN", "")
 HF_REPO                 = os.environ.get("HF_REPO", "")
 MAX_SEQ_LENGTH          = int(os.environ.get("MAX_SEQ_LENGTH", "4096"))
 REUSE_RFT_ROLLOUTS      = os.environ.get("REUSE_RFT_ROLLOUTS", "").lower() in {"1", "true", "yes", "y"}
+RFT_BACKEND             = os.environ.get("RFT_BACKEND", "standard" if REUSE_RFT_ROLLOUTS else "unsloth").lower()
 
 SENTINEL_TASKS = [
     "basic_oversight",
@@ -272,8 +273,8 @@ def build_sft_trainer(model, tokenizer, dataset: Dataset, output_dir: Path) -> T
 # ---------------------------------------------------------------------------
 # 1. Load base model + existing LoRA in fp16 for inference
 # ---------------------------------------------------------------------------
-def load_policy():
-    banner("Loading base model + GRPO LoRA")
+def load_unsloth_policy():
+    banner("Loading base model + GRPO LoRA with Unsloth")
     from unsloth import FastLanguageModel
 
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -294,6 +295,65 @@ def load_policy():
 
     FastLanguageModel.for_inference(model)
     return model, tokenizer
+
+
+def load_standard_policy():
+    """Load with standard Transformers/PEFT to avoid Unsloth/xFormers training kernels."""
+    banner("Loading base model + GRPO LoRA with standard Transformers")
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    eos_token = resolve_tokenizer_eos(tokenizer)
+    if eos_token:
+        tokenizer.eos_token = eos_token
+    if tokenizer.pad_token_id is None and eos_token:
+        tokenizer.pad_token = eos_token
+
+    model_kwargs = {
+        "quantization_config": quant_config,
+        "device_map": "auto",
+        "torch_dtype": torch.float16,
+        "trust_remote_code": True,
+    }
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            attn_implementation="eager",
+            **model_kwargs,
+        )
+        logger.info("Loaded standard model with eager attention")
+    except TypeError:
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_kwargs)
+        logger.info("Loaded standard model without explicit attention override")
+
+    if hasattr(model.config, "use_cache"):
+        model.config.use_cache = False
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+
+    if Path(LORA_PATH).exists():
+        logger.info("Loading LoRA adapter from %s", LORA_PATH)
+        model = PeftModel.from_pretrained(model, LORA_PATH, is_trainable=True)
+        for name, p in model.named_parameters():
+            if "lora_" in name and p.dtype != torch.float16:
+                p.data = p.data.to(torch.float16)
+    else:
+        logger.warning("LORA_PATH %s does not exist, using base model only", LORA_PATH)
+
+    model.train()
+    return model, tokenizer
+
+
+def load_policy():
+    if RFT_BACKEND == "standard":
+        return load_standard_policy()
+    if RFT_BACKEND != "unsloth":
+        logger.warning("Unknown RFT_BACKEND=%s; falling back to standard", RFT_BACKEND)
+        return load_standard_policy()
+    return load_unsloth_policy()
 
 
 # ---------------------------------------------------------------------------
@@ -392,8 +452,11 @@ def filter_and_sft(model, tokenizer, all_rollouts: List[Dict[str, Any]]) -> Dict
     ds = Dataset.from_list(rows)
 
     # Switch model back to training mode (Unsloth toggles this on for_inference)
-    from unsloth import FastLanguageModel
-    FastLanguageModel.for_training(model)
+    if RFT_BACKEND == "unsloth":
+        from unsloth import FastLanguageModel
+        FastLanguageModel.for_training(model)
+    else:
+        model.train()
     disable_gradient_checkpointing(model)
 
     sft_output = Path(RFT_OUTPUT_DIR) / "sft_run"
@@ -461,6 +524,7 @@ def main() -> None:
         "SFT_LR":                SFT_LR,
         "HF_REPO":               HF_REPO or "(skip)",
         "REUSE_RFT_ROLLOUTS":    REUSE_RFT_ROLLOUTS,
+        "RFT_BACKEND":           RFT_BACKEND,
     }.items():
         logger.info("  %-22s = %s", k, v)
 
